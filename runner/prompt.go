@@ -26,6 +26,13 @@ func (p *StdinPrompter) AskFailure(step config.Step, exitCode int) (Outcome, err
 	return p.readChoice()
 }
 
+// Interactive asks the human to confirm the outcome of an interactive
+// session that ended in finalState.
+func (p *StdinPrompter) Interactive(step config.Step, finalState string) (Outcome, error) {
+	fmt.Fprintf(p.Out, "Session %q ended (state: %s). [a]dvance / [r]etry / [x]abort: ", step.Name, finalState)
+	return p.readChoice()
+}
+
 func (p *StdinPrompter) readChoice() (Outcome, error) {
 	r := bufio.NewReader(p.In)
 	line, err := r.ReadString('\n')

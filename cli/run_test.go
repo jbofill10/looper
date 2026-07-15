@@ -40,6 +40,37 @@ func TestRunLoop_ExecutesScriptLoop(t *testing.T) {
 	}
 }
 
+// TestRunLoop_ScriptLoopUnaffectedByLooperBinWiring is a regression test:
+// wiring worker.LooperBin from os.Executable() must not break the plain
+// script-step path (no interactive steps involved, no claude needed).
+func TestRunLoop_ScriptLoopUnaffectedByLooperBinWiring(t *testing.T) {
+	repo := t.TempDir()
+	loopDir := filepath.Join(repo, ".looper", "loops")
+	if err := os.MkdirAll(loopDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(repo, "ran.txt")
+	loopYAML := "name: t2\nmax_iterations: 1\nsteps:\n" +
+		"  - name: do\n    type: script\n    run: \"echo hello > " + marker + "\"\n"
+	if err := os.WriteFile(filepath.Join(loopDir, "t2.yaml"), []byte(loopYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunLoop(RunOptions{
+		LoopName: "t2",
+		BaseDir:  filepath.Join(repo, ".looper"),
+		Workdir:  repo,
+		In:       strings.NewReader(""),
+		Out:      &strings.Builder{},
+	})
+	if err != nil {
+		t.Fatalf("RunLoop: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("script step did not run (marker missing): %v", err)
+	}
+}
+
 func TestRunLoop_MissingLoopErrors(t *testing.T) {
 	err := RunLoop(RunOptions{
 		LoopName: "nope",

@@ -9,6 +9,7 @@ func newRootCmd() *cobra.Command {
 		Short: "looper runs loop-based workflows",
 	}
 	root.AddCommand(newRunCmd())
+	root.AddCommand(newHookCmd())
 	return root
 }
 

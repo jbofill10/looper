@@ -1,0 +1,16 @@
+# Example loop demonstrating an `interactive` step.
+#
+# The `plan` step below hands off the terminal to the configured harness's
+# interactive command (default: `claude`), which must be installed and on
+# PATH to actually run this loop. looper listens on a per-step Unix socket
+# for Claude Code hook events (wired automatically via --settings) to derive
+# session state (working / needs-human / awaiting-approval / no-work) and,
+# once the session ends, asks you to confirm how to proceed.
+name: plan-example
+max_iterations: 1
+steps:
+  - name: plan
+    type: interactive
+    prompt: |
+      Review the current state of the repository and propose a plan.
+      When you are done, say "{{SENTINEL_DONE}}".

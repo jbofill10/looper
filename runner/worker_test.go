@@ -147,7 +147,7 @@ func TestWorker_HeadlessStepRunsToCompletion(t *testing.T) {
 	}
 }
 
-func TestWorker_RejectsInteractive(t *testing.T) {
+func TestWorker_ExecutorForInteractive(t *testing.T) {
 	loop := &config.Loop{
 		Name:          "l",
 		MaxIterations: 1,
@@ -155,8 +155,33 @@ func TestWorker_RejectsInteractive(t *testing.T) {
 	}
 	_ = loop.Validate()
 	w := newWorker(t, loop, &FakePrompter{})
-	err := w.Run()
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("expected 'not supported' error, got %v", err)
+	w.LooperBin = "/usr/local/bin/looper"
+
+	exec, err := w.executorFor(loop.Steps[0])
+	if err != nil {
+		t.Fatalf("executorFor: %v", err)
+	}
+	ie, ok := exec.(*InteractiveExecutor)
+	if !ok {
+		t.Fatalf("executorFor returned %T, want *InteractiveExecutor", exec)
+	}
+	if ie.LooperBin != w.LooperBin {
+		t.Errorf("LooperBin = %q, want %q", ie.LooperBin, w.LooperBin)
+	}
+	if ie.Harness.Interactive == nil {
+		t.Errorf("Harness not resolved: %+v", ie.Harness)
+	}
+}
+
+func TestWorker_UnknownStepTypeErrors(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "plan", Type: "bogus", Prompt: "hi"}},
+	}
+	w := newWorker(t, loop, &FakePrompter{})
+	_, err := w.executorFor(loop.Steps[0])
+	if err == nil || !strings.Contains(err.Error(), "unknown type") {
+		t.Fatalf("expected 'unknown type' error, got %v", err)
 	}
 }
