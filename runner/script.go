@@ -66,20 +66,22 @@ func (e *ScriptExecutor) Run(rc *runctx.RunContext, step config.Step) (Outcome, 
 	if step.SignalsNoWork && exitCode == NoWorkExitCode {
 		return OutcomeNoWork, nil
 	}
-	return e.resolveFailure(step, exitCode)
+	return resolveFailure(e.Prompter, step, exitCode)
 }
 
-func (e *ScriptExecutor) resolveFailure(step config.Step, exitCode int) (Outcome, error) {
+// resolveFailure decides the outcome of a failed script/headless step based
+// on its on_fail policy, consulting p only for OnFailAsk.
+func resolveFailure(p Prompter, step config.Step, exitCode int) (Outcome, error) {
 	switch step.OnFail {
 	case config.OnFailRetry:
 		return OutcomeRetry, nil
 	case config.OnFailAbort:
 		return OutcomeAbort, nil
 	default: // OnFailAsk (validation defaults empty -> ask)
-		if e.Prompter == nil {
+		if p == nil {
 			return OutcomeAbort, nil
 		}
-		return e.Prompter.AskFailure(step, exitCode)
+		return p.AskFailure(step, exitCode)
 	}
 }
 

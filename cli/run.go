@@ -11,6 +11,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// globalPath returns the path to looper's global config file:
+// $XDG_CONFIG_HOME/looper/config.yaml, or ~/.config/looper/config.yaml.
+func globalPath() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "looper", "config.yaml")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".config", "looper", "config.yaml")
+	}
+	return filepath.Join(home, ".config", "looper", "config.yaml")
+}
+
 // RunOptions configures a single `looper run` invocation.
 type RunOptions struct {
 	LoopName string    // loads BaseDir/loops/<LoopName>.yaml when File is empty
@@ -34,6 +47,10 @@ func RunLoop(opts RunOptions) error {
 	if err != nil {
 		return err
 	}
+	global, err := config.LoadGlobal(globalPath())
+	if err != nil {
+		return err
+	}
 
 	in := opts.In
 	if in == nil {
@@ -49,6 +66,7 @@ func RunLoop(opts RunOptions) error {
 		BaseDir:  opts.BaseDir,
 		Workdir:  opts.Workdir,
 		Prompter: &runner.StdinPrompter{In: in, Out: out},
+		Global:   global,
 	}
 	fmt.Fprintf(out, "running loop %q\n", loop.Name)
 	if err := w.Run(); err != nil {

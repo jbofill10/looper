@@ -12,11 +12,13 @@ import (
 
 // Worker drives one loop's iterations single-threaded, in-process.
 type Worker struct {
-	Loop     *config.Loop
-	BaseDir  string // the .looper dir
-	Workdir  string // execution dir (workspace: shared)
-	Prompter Prompter
-	NewID    func() string
+	Loop        *config.Loop
+	BaseDir     string // the .looper dir
+	Workdir     string // execution dir (workspace: shared)
+	Prompter    Prompter
+	NewID       func() string
+	Global      *config.Global // harness configuration; defaults to config.DefaultGlobal()
+	HarnessName string         // default harness name; falls back to Global.DefaultHarness
 }
 
 func (w *Worker) idGen() func() string {
@@ -101,7 +103,21 @@ func (w *Worker) executorFor(step config.Step) (Executor, error) {
 		return &ScriptExecutor{Prompter: w.Prompter}, nil
 	case config.StepManual:
 		return &ManualExecutor{Prompter: w.Prompter}, nil
-	case config.StepInteractive, config.StepHeadless:
+	case config.StepHeadless:
+		g := w.Global
+		if g == nil {
+			g = config.DefaultGlobal()
+		}
+		name := step.Harness
+		if name == "" {
+			name = w.HarnessName
+		}
+		h, err := g.ResolveHarness(name)
+		if err != nil {
+			return nil, fmt.Errorf("step %q: %w", step.Name, err)
+		}
+		return &HeadlessExecutor{Harness: h, Prompter: w.Prompter}, nil
+	case config.StepInteractive:
 		return nil, fmt.Errorf("step %q: type %q not supported until a later milestone", step.Name, step.Type)
 	default:
 		return nil, fmt.Errorf("step %q: unknown type %q", step.Name, step.Type)
