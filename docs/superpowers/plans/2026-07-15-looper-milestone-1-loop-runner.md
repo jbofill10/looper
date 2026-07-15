@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Go module path: `github.com/jbofill/looper` (prefixes every import).
+- Go module path: `github.com/jbofill10/looper` (prefixes every import).
 - Go version floor: 1.26 (matches installed toolchain).
 - Per-iteration state lives under `.looper/runs/<loop>/<iteration-id>/`; loop definitions under `.looper/loops/<name>.yaml`. `.looper/runs/` is runtime state and must be git-ignored.
 - Reserved script exit code `78` = "no work" (only honored when the step sets `signals_no_work: true`).
@@ -41,10 +41,10 @@
 Run:
 ```bash
 cd /home/dice/git/looper
-go mod init github.com/jbofill/looper
+go mod init github.com/jbofill10/looper
 go get gopkg.in/yaml.v3
 ```
-Expected: `go.mod` created declaring `module github.com/jbofill/looper` and `go 1.26`; `gopkg.in/yaml.v3` added as a require.
+Expected: `go.mod` created declaring `module github.com/jbofill10/looper` and `go 1.26`; `gopkg.in/yaml.v3` added as a require.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -564,8 +564,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 func newRC(t *testing.T) *runctx.RunContext {
@@ -696,8 +696,8 @@ Create `runner/runner.go`:
 package runner
 
 import (
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // NoWorkExitCode is the reserved script exit code meaning "no work available".
@@ -772,8 +772,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // ScriptExecutor runs a shell command for a script step.
@@ -930,7 +930,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbofill/looper/config"
+	"github.com/jbofill10/looper/config"
 )
 
 func TestManual_DelegatesToPrompter(t *testing.T) {
@@ -991,8 +991,8 @@ Create `runner/manual.go`:
 package runner
 
 import (
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // ManualExecutor represents a human gate: it defers entirely to the Prompter.
@@ -1017,7 +1017,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/jbofill/looper/config"
+	"github.com/jbofill10/looper/config"
 )
 
 // StdinPrompter is the interactive terminal Prompter used by the CLI. It reads
@@ -1101,7 +1101,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbofill/looper/config"
+	"github.com/jbofill10/looper/config"
 )
 
 // idSeq returns a deterministic id generator: "iter-1", "iter-2", ...
@@ -1246,8 +1246,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // Worker drives one loop's iterations single-threaded, in-process.
@@ -1462,8 +1462,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runner"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runner"
 )
 
 // RunOptions configures a single `looper run` invocation.
@@ -1587,7 +1587,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jbofill/looper/cli"
+	"github.com/jbofill10/looper/cli"
 )
 
 func main() {
