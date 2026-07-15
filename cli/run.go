@@ -61,12 +61,18 @@ func RunLoop(opts RunOptions) error {
 		out = os.Stdout
 	}
 
+	looperBin, err := os.Executable()
+	if err != nil {
+		looperBin = "looper"
+	}
+
 	w := &runner.Worker{
-		Loop:     loop,
-		BaseDir:  opts.BaseDir,
-		Workdir:  opts.Workdir,
-		Prompter: &runner.StdinPrompter{In: in, Out: out},
-		Global:   global,
+		Loop:      loop,
+		BaseDir:   opts.BaseDir,
+		Workdir:   opts.Workdir,
+		Prompter:  &runner.StdinPrompter{In: in, Out: out},
+		Global:    global,
+		LooperBin: looperBin,
 	}
 	fmt.Fprintf(out, "running loop %q\n", loop.Name)
 	if err := w.Run(); err != nil {
