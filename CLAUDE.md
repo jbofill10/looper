@@ -31,3 +31,11 @@ Module path: `github.com/jbofill10/looper`. Go 1.26.
 - Build: `go build ./...`
 - Test: `go test ./...`
 - Run a loop: `go run . run <loop-name>` (loads `.looper/loops/<name>.yaml`)
+
+## Harness config
+
+`headless` steps run a configured harness's headless command (default:
+`claude -p <prompt>`). The default harness set is built in; override it via
+`~/.config/looper/config.yaml` (or `$XDG_CONFIG_HOME/looper/config.yaml`). See
+`.looper/loops/headless-example.yaml` for a sample loop; its `work-on-task`
+step needs the `claude` CLI installed to actually run.
