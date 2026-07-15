@@ -8,9 +8,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// halfCloser is implemented by *net.UnixConn: it lets us signal EOF on the
+// write side while keeping the read side open to await the listener's ack.
+type halfCloser interface {
+	CloseWrite() error
+}
+
 // forwardHook reads all of in and writes it to the Unix socket at
 // socketPath, forwarding a Claude Code hook payload to a running looper
-// session listener.
+// session listener. It waits for the listener's one-byte ack before
+// returning, so the caller (and, transitively, whatever process invoked
+// this command as a hook) only proceeds once the event has been durably
+// recorded — this is what lets the listener be closed safely as soon as the
+// interactive session's process exits, without racing an as-yet-unaccepted
+// connection.
 func forwardHook(in io.Reader, socketPath string) error {
 	data, err := io.ReadAll(in)
 	if err != nil {
@@ -23,6 +34,14 @@ func forwardHook(in io.Reader, socketPath string) error {
 	defer conn.Close()
 	if _, err := conn.Write(data); err != nil {
 		return fmt.Errorf("write hook payload: %w", err)
+	}
+	if hc, ok := conn.(halfCloser); ok {
+		if err := hc.CloseWrite(); err != nil {
+			return fmt.Errorf("close write side of hook socket: %w", err)
+		}
+	}
+	if _, err := io.ReadAll(conn); err != nil {
+		return fmt.Errorf("await hook ack: %w", err)
 	}
 	return nil
 }

@@ -63,6 +63,13 @@ func (l *Listener) handleConn(conn net.Conn) {
 		return
 	}
 	l.events <- h
+	// Acknowledge only after the event has been handed to a receiver on
+	// l.events, so a caller that waits for this ack (e.g. the hook
+	// forwarder) is guaranteed the event was durably delivered before it
+	// returns. This lets callers safely close the listener once every
+	// forwarder has returned, without racing an unaccepted connection
+	// still sitting in the kernel's backlog.
+	_, _ = conn.Write([]byte{'\n'})
 }
 
 // Events returns the channel on which received hooks are delivered. It is

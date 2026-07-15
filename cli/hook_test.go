@@ -31,9 +31,10 @@ func TestForwardHook_DeliversToListener(t *testing.T) {
 	defer l.Close()
 
 	hookJSON := `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`
-	if err := forwardHook(strings.NewReader(hookJSON), path); err != nil {
-		t.Fatalf("forwardHook: %v", err)
-	}
+	// forwardHook blocks until the listener acks receipt, so it must run
+	// concurrently with the read from l.Events() below.
+	fwdErr := make(chan error, 1)
+	go func() { fwdErr <- forwardHook(strings.NewReader(hookJSON), path) }()
 
 	select {
 	case h := <-l.Events():
@@ -42,6 +43,15 @@ func TestForwardHook_DeliversToListener(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for event")
+	}
+
+	select {
+	case err := <-fwdErr:
+		if err != nil {
+			t.Fatalf("forwardHook: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for forwardHook to return")
 	}
 }
 
