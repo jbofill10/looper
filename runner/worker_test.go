@@ -37,7 +37,7 @@ func TestWorker_RunsUntilNoWork(t *testing.T) {
 		Steps: []config.Step{
 			{
 				Name: "get-task", Type: config.StepScript, SignalsNoWork: true,
-				Run: fmt.Sprintf(`n=$(cat %q 2>/dev/null || echo 0); n=$((n+1)); echo $n > %q; [ $n -ge 2 ] && exit 78; echo TASK_ID=$n >> "$LOOPER_OUTPUT"`, counter, counter),
+				Run:     fmt.Sprintf(`n=$(cat %q 2>/dev/null || echo 0); n=$((n+1)); echo $n > %q; [ $n -ge 2 ] && exit 78; echo TASK_ID=$n >> "$LOOPER_OUTPUT"`, counter, counter),
 				Outputs: []string{"TASK_ID"},
 			},
 			{Name: "work", Type: config.StepScript, Run: `echo "did $TASK_ID"`},
@@ -117,6 +117,33 @@ func TestWorker_AbortStopsIteration(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(w.BaseDir, "runs", "l", "iter-1", "steps", "never.log")); err == nil {
 		t.Errorf("second step should not have run after abort")
+	}
+}
+
+func TestWorker_HeadlessStepRunsToCompletion(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "plan", Type: config.StepHeadless, Prompt: "echo hi"}},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+	w.Global = &config.Global{
+		DefaultHarness: "stub",
+		Harnesses: map[string]config.Harness{
+			"stub": {Headless: []string{"sh", "-c", "{{PROMPT}}"}},
+		},
+	}
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	dir := filepath.Join(w.BaseDir, "runs", "l", "iter-1", "events.jsonl")
+	data, err := os.ReadFile(dir)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if !strings.Contains(string(data), "advance") {
+		t.Errorf("expected advance outcome in events; got %q", data)
 	}
 }
 
