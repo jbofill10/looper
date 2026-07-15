@@ -39,18 +39,25 @@ type Executor interface {
 	Run(rc *runctx.RunContext, step config.Step) (Outcome, error)
 }
 
-// Prompter handles human interaction: manual steps and on_fail=ask decisions.
+// Prompter handles human interaction: manual steps, on_fail=ask decisions,
+// and confirming the outcome of an interactive session.
 type Prompter interface {
 	AskFailure(step config.Step, exitCode int) (Outcome, error)
 	Manual(step config.Step) (Outcome, error)
+	// Interactive asks the human to confirm the outcome of an interactive
+	// session that has ended in finalState.
+	Interactive(step config.Step, finalState string) (Outcome, error)
 }
 
 // FakePrompter is a test double returning preset outcomes.
 type FakePrompter struct {
-	FailureOutcome Outcome
-	ManualOutcome  Outcome
-	FailureCalls   int
-	ManualCalls    int
+	FailureOutcome       Outcome
+	ManualOutcome        Outcome
+	InteractiveOutcome   Outcome
+	FailureCalls         int
+	ManualCalls          int
+	InteractiveCalls     int
+	LastInteractiveState string
 }
 
 func (f *FakePrompter) AskFailure(step config.Step, exitCode int) (Outcome, error) {
@@ -61,4 +68,10 @@ func (f *FakePrompter) AskFailure(step config.Step, exitCode int) (Outcome, erro
 func (f *FakePrompter) Manual(step config.Step) (Outcome, error) {
 	f.ManualCalls++
 	return f.ManualOutcome, nil
+}
+
+func (f *FakePrompter) Interactive(step config.Step, finalState string) (Outcome, error) {
+	f.InteractiveCalls++
+	f.LastInteractiveState = finalState
+	return f.InteractiveOutcome, nil
 }
