@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jbofill/looper/cli"
+	"github.com/jbofill10/looper/cli"
 )
 
 func main() {

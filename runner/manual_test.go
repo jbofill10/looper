@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbofill/looper/config"
+	"github.com/jbofill10/looper/config"
 )
 
 func TestManual_DelegatesToPrompter(t *testing.T) {

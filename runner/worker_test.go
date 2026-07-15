@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbofill/looper/config"
+	"github.com/jbofill10/looper/config"
 )
 
 // idSeq returns a deterministic id generator: "iter-1", "iter-2", ...

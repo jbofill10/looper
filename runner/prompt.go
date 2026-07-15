@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/jbofill/looper/config"
+	"github.com/jbofill10/looper/config"
 )
 
 // StdinPrompter is the interactive terminal Prompter used by the CLI. It reads

@@ -1,4 +1,4 @@
-module github.com/jbofill/looper
+module github.com/jbofill10/looper
 
 go 1.26.4
 

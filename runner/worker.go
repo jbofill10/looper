@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // Worker drives one loop's iterations single-threaded, in-process.

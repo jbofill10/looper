@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runner"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runner"
 	"github.com/spf13/cobra"
 )
 

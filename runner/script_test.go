@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 func newRC(t *testing.T) *runctx.RunContext {

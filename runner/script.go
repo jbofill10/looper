@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // ScriptExecutor runs a shell command for a script step.

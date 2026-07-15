@@ -2,8 +2,8 @@
 package runner
 
 import (
-	"github.com/jbofill/looper/config"
-	"github.com/jbofill/looper/runctx"
+	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // NoWorkExitCode is the reserved script exit code meaning "no work available".
