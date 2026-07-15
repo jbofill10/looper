@@ -19,6 +19,7 @@ type Worker struct {
 	NewID       func() string
 	Global      *config.Global // harness configuration; defaults to config.DefaultGlobal()
 	HarnessName string         // default harness name; falls back to Global.DefaultHarness
+	LooperBin   string         // absolute path to the looper binary, used by interactive steps for hook wiring
 }
 
 func (w *Worker) idGen() func() string {
@@ -104,22 +105,36 @@ func (w *Worker) executorFor(step config.Step) (Executor, error) {
 	case config.StepManual:
 		return &ManualExecutor{Prompter: w.Prompter}, nil
 	case config.StepHeadless:
-		g := w.Global
-		if g == nil {
-			g = config.DefaultGlobal()
-		}
-		name := step.Harness
-		if name == "" {
-			name = w.HarnessName
-		}
-		h, err := g.ResolveHarness(name)
+		h, err := w.resolveHarness(step)
 		if err != nil {
-			return nil, fmt.Errorf("step %q: %w", step.Name, err)
+			return nil, err
 		}
 		return &HeadlessExecutor{Harness: h, Prompter: w.Prompter}, nil
 	case config.StepInteractive:
-		return nil, fmt.Errorf("step %q: type %q not supported until a later milestone", step.Name, step.Type)
+		h, err := w.resolveHarness(step)
+		if err != nil {
+			return nil, err
+		}
+		return &InteractiveExecutor{Harness: h, Prompter: w.Prompter, LooperBin: w.LooperBin}, nil
 	default:
 		return nil, fmt.Errorf("step %q: unknown type %q", step.Name, step.Type)
 	}
+}
+
+// resolveHarness resolves the harness a headless/interactive step should
+// use: step.Harness if set, else w.HarnessName, else Global.DefaultHarness.
+func (w *Worker) resolveHarness(step config.Step) (config.Harness, error) {
+	g := w.Global
+	if g == nil {
+		g = config.DefaultGlobal()
+	}
+	name := step.Harness
+	if name == "" {
+		name = w.HarnessName
+	}
+	h, err := g.ResolveHarness(name)
+	if err != nil {
+		return config.Harness{}, fmt.Errorf("step %q: %w", step.Name, err)
+	}
+	return h, nil
 }
