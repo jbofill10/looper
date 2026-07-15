@@ -151,11 +151,16 @@ part of the build.
 
 ### Transport
 
-**Recommended: gRPC over the Unix socket** — structured RPC for commands, server
-streaming for the state feed, and a bidirectional stream for PTY I/O + resize.
-Well-trodden and gives clean streaming semantics. The transport is an internal
-boundary and can be swapped; a hand-rolled framed JSON+bytes protocol is an
-acceptable lighter-weight alternative if gRPC tooling proves heavy.
+**gRPC over the Unix socket.** Three traffic classes map onto gRPC cleanly:
+
+- **Commands** (client → daemon): unary RPCs — start / pause / stop / scale a
+  loop, approve / retry / abort a step, attach.
+- **State stream** (daemon → client): a server-streaming RPC pushing worker/step
+  state so the fleet + focus views stay live.
+- **PTY I/O** (bidirectional): a bidi stream carrying raw terminal bytes both
+  ways plus resize events, established on attach and torn down on detach.
+
+The transport is an internal boundary — nothing user-facing depends on it.
 
 ## 7. TUI (Client)
 
