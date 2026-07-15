@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/events"
 	"github.com/jbofill10/looper/harness"
+	looperpty "github.com/jbofill10/looper/pty"
 	"github.com/jbofill10/looper/runctx"
 )
 
@@ -28,13 +28,13 @@ type InteractiveExecutor struct {
 	LooperBin string
 
 	// run starts the session and blocks until it exits. Injectable for
-	// tests; defaults to execInteractive. socketPath is the listener
-	// socket; env includes LOOPER_HOOK_SOCKET.
+	// tests; defaults to runPTY. socketPath is the listener socket; env
+	// includes LOOPER_HOOK_SOCKET.
 	run func(argv, env []string, socketPath string) error
 }
 
 // Run builds the interactive session's prompt, hook settings, and argv,
-// starts the session (via run/execInteractive), and derives the session's
+// starts the session (via run/runPTY), and derives the session's
 // final state from the hook events received on the socket. The final
 // outcome is StateNoWork -> OutcomeNoWork, otherwise whatever the Prompter
 // decides after being told the final state.
@@ -89,7 +89,7 @@ func (e *InteractiveExecutor) Run(rc *runctx.RunContext, step config.Step) (Outc
 
 	run := e.run
 	if run == nil {
-		run = execInteractive
+		run = runPTY
 	}
 	runErr := run(argv, env, socketPath)
 
@@ -128,21 +128,31 @@ func socketPathFor(rc *runctx.RunContext, step config.Step) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("looper-%08x.sock", sum))
 }
 
-// execInteractive is the default run implementation: it execs argv with
-// inherited stdio, the given env, and cmd.Dir taken from the env's WORKDIR
-// entry if present. It is intentionally thin and not unit-tested; tests
-// inject a fake run instead.
-func execInteractive(argv, env []string, socketPath string) error {
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = env
+// runPTY is the default run implementation: it starts argv in a
+// looper-owned pseudoterminal (cmd.Dir taken from the env's WORKDIR entry if
+// present), auto-attaches the human to it, and waits for it to exit. It is
+// intentionally thin and not unit-tested against a real pty in most cases;
+// tests inject a fake run instead (see TestInteractive_DefaultRunUsesRealPTY
+// for the one real-pty exception, skipped where a pty can't be allocated).
+func runPTY(argv, env []string, socketPath string) error {
+	var dir string
 	for _, kv := range env {
 		if k, v, ok := strings.Cut(kv, "="); ok && k == "WORKDIR" {
-			cmd.Dir = v
+			dir = v
 			break
 		}
 	}
-	return cmd.Run()
+
+	sess, err := looperpty.Start(looperpty.Config{Argv: argv, Env: env, Dir: dir})
+	if err != nil {
+		return fmt.Errorf("start interactive pty: %w", err)
+	}
+
+	go func() {
+		_ = sess.Attach(os.Stdin, os.Stdout)
+	}()
+
+	runErr := sess.Wait()
+	_ = sess.Close()
+	return runErr
 }

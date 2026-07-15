@@ -2,14 +2,17 @@ package runner
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/events"
+	looperpty "github.com/jbofill10/looper/pty"
 )
 
 // envLookup returns the value of key in a KEY=VALUE env slice.
@@ -139,6 +142,56 @@ func TestInteractive_RetryPath(t *testing.T) {
 	}
 	if got != OutcomeRetry {
 		t.Errorf("outcome = %v, want retry", got)
+	}
+}
+
+// TestInteractive_DefaultRunUsesRealPTY exercises the default run
+// implementation (run==nil) end-to-end. The argv writes to a result file
+// whether its stdin (fd 0) is a tty, then exits, so the final state falls
+// through to the Prompter. Since the test process's own stdin is not
+// generally a tty (e.g. under `go test` in CI), only a genuine PTY-backed
+// default run makes the child observe a tty on fd 0; the old exec-with-
+// inherited-stdio implementation would report NOTTY here. It skips if the
+// environment cannot allocate a pty (e.g. headless CI without pty support).
+func TestInteractive_DefaultRunUsesRealPTY(t *testing.T) {
+	probe, err := looperpty.Start(looperpty.Config{Argv: []string{"sh", "-c", "true"}})
+	if err != nil {
+		t.Skipf("pty not available in this environment: %v", err)
+	}
+	_ = probe.Wait()
+	_ = probe.Close()
+
+	resultFile := filepath.Join(t.TempDir(), "tty-check")
+	rc := newRC(t)
+	h := claudeHarness()
+	h.Interactive = []string{"sh", "-c", fmt.Sprintf(
+		`if [ -t 0 ]; then printf ISTTY > %s; else printf NOTTY > %s; fi`,
+		resultFile, resultFile,
+	)}
+	fp := &FakePrompter{InteractiveOutcome: OutcomeAdvance}
+	exec := &InteractiveExecutor{
+		Harness:  h,
+		Prompter: fp,
+	}
+	step := config.Step{Name: "session", Type: config.StepInteractive, Prompt: "do the thing"}
+
+	got, err := exec.Run(rc, step)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got != OutcomeAdvance {
+		t.Errorf("outcome = %v, want advance", got)
+	}
+	if fp.InteractiveCalls != 1 {
+		t.Errorf("InteractiveCalls = %d, want 1", fp.InteractiveCalls)
+	}
+
+	got2, err := os.ReadFile(resultFile)
+	if err != nil {
+		t.Fatalf("read result file: %v", err)
+	}
+	if string(got2) != "ISTTY" {
+		t.Errorf("child stdin tty-ness = %q, want ISTTY (default run should be pty-backed)", got2)
 	}
 }
 
