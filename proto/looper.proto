@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package looper.v1;
+
+option go_package = "github.com/jbofill10/looper/rpc;rpc";
+
+// Looper is the daemon control service spoken over the local Unix socket.
+service Looper {
+  // Ping checks liveness and returns the daemon version.
+  rpc Ping(PingRequest) returns (PingResponse);
+  // Shutdown asks the daemon to stop gracefully.
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message PingRequest {}
+
+message PingResponse {
+  string version = 1;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}
