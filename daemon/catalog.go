@@ -147,6 +147,7 @@ func (m *Manager) RunLoopOnce(loopName, loopFile, baseDir, workdir string) (stri
 	if err != nil {
 		return "", fmt.Errorf("preparing run-once loop file: %w", err)
 	}
+	defer os.RemoveAll(tmp)
 	oncePath := filepath.Join(tmp, loopName+".yaml")
 	if err := config.SaveLoop(&once, oncePath); err != nil {
 		return "", fmt.Errorf("writing run-once loop file: %w", err)
