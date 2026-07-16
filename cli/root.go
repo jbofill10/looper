@@ -1,12 +1,23 @@
 // Package cli wires looper's command-line interface.
 package cli
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/jbofill10/looper/client"
+	"github.com/spf13/cobra"
+)
 
 func newRootCmd() *cobra.Command {
+	var socket string
 	root := &cobra.Command{
 		Use:   "looper",
 		Short: "looper runs loop-based workflows",
+		// A bare `looper` invocation (no subcommand) launches the TUI, the
+		// same as `looper tui`. Cobra only invokes a parent's RunE when no
+		// subcommand matched, so existing subcommands are unaffected.
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTui(cmd, socket)
+		},
 	}
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newHookCmd())
@@ -17,6 +28,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newLsCmd())
 	root.AddCommand(newStopCmd())
 	root.AddCommand(newAttachCmd())
+	root.AddCommand(newTuiCmd())
+	root.Flags().StringVar(&socket, "socket", client.SocketPath(), "path to looperd's Unix socket")
 	return root
 }
 
