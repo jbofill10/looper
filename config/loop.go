@@ -46,6 +46,7 @@ type Loop struct {
 	MaxConcurrency int    `yaml:"max_concurrency,omitempty"`
 	MaxIterations  int    `yaml:"max_iterations,omitempty"`
 	Workspace      string `yaml:"workspace,omitempty"` // shared|worktree
+	TaskVar        string `yaml:"task_var,omitempty"`  // the output var identifying a work unit; defaults to TASK_ID
 	Steps          []Step `yaml:"steps"`
 }
 
@@ -86,6 +87,9 @@ func (l *Loop) Validate() error {
 	}
 	if l.MaxConcurrency == 0 {
 		l.MaxConcurrency = l.Concurrency
+	}
+	if l.TaskVar == "" {
+		l.TaskVar = "TASK_ID"
 	}
 	seen := map[string]bool{}
 	for i := range l.Steps {
