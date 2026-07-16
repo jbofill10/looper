@@ -55,17 +55,23 @@ func (s *Server) Serve(socketPath string) error {
 		return fmt.Errorf("removing stale socket %s: %w", socketPath, err)
 	}
 
+	// Create and publish the gRPC server BEFORE listening, so that once the
+	// socket file exists (created by net.Listen) a concurrent Stop is
+	// guaranteed to observe a non-nil server. Otherwise Stop could load a nil
+	// pointer and no-op, leaving Serve running forever.
+	grpcServer := grpc.NewServer()
+	rpc.RegisterLooperServer(grpcServer, s)
+	s.grpcServer.Store(grpcServer)
+
 	lis, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socketPath, err)
 	}
 	defer os.Remove(socketPath)
 
-	grpcServer := grpc.NewServer()
-	rpc.RegisterLooperServer(grpcServer, s)
-	s.grpcServer.Store(grpcServer)
-
-	if err := grpcServer.Serve(lis); err != nil {
+	// ErrServerStopped is a normal outcome when Stop/GracefulStop is called
+	// (including before or during the Serve call), not a serving failure.
+	if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
 		return fmt.Errorf("serving on %s: %w", socketPath, err)
 	}
 	return nil
