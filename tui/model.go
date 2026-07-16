@@ -12,6 +12,9 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jbofill10/looper/builder"
+	"github.com/jbofill10/looper/config"
 )
 
 // StateUpdateMsg mirrors daemon.Update: it is the tea.Msg carrying one
@@ -109,21 +112,26 @@ type Options struct {
 	// session. It returns a tea.Cmd that suspends the Bubble Tea program,
 	// bridges the session, and resumes it on return.
 	AttachFn func(runID string) tea.Cmd
+	// SaveLoopFn persists a completed guided-builder loop and returns the
+	// path written. Invoked when the embedded builder (viewBuilder) reaches
+	// its done stage.
+	SaveLoopFn func(loop *config.Loop) (string, error)
 	// Quit, if set, makes Init immediately emit tea.Quit — used by tests
 	// and tools that want a Model that never blocks on a real program run.
 	Quit bool
 }
 
-// viewKind selects which of the TUI's two views is rendered.
+// viewKind selects which of the TUI's three views is rendered.
 type viewKind int
 
 const (
 	viewFleet viewKind = iota
 	viewFocus
+	viewBuilder
 )
 
 // Model is the Bubble Tea model for looper's fleet & focus TUI. It holds
-// aggregated run/worker state and renders both views; it never touches the
+// aggregated run/worker state and renders all views; it never touches the
 // network directly (see Options.RespondFn / Options.AttachFn).
 type Model struct {
 	opts Options
@@ -136,6 +144,8 @@ type Model struct {
 	view                  viewKind
 	cursor                int
 	focusRun, focusWorker string
+	builder               builder.Model
+	builderMsg            string
 }
 
 // NewModel returns a Model configured with opts.
@@ -165,6 +175,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyRunsSnapshot(msg)
 		return m, nil
 	case tea.KeyMsg:
+		if m.view == viewBuilder {
+			return m.handleBuilderKey(msg)
+		}
 		return m.handleKey(msg)
 	}
 	return m, nil
@@ -205,6 +218,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "esc":
 		m.view = viewFleet
+	case "n":
+		if m.view == viewFleet {
+			m.builder = builder.New(nil)
+			m.builderMsg = ""
+			m.view = viewBuilder
+		}
 	case "a", "r", "x":
 		if m.view == viewFocus {
 			return m.handleFocusKey(msg.String())
@@ -247,6 +266,52 @@ func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleBuilderKey routes a key press while the guided loop builder
+// (viewBuilder) is active: ctrl+c quits the whole program, esc discards
+// the in-progress builder and returns to the fleet view without saving,
+// and any other key is forwarded to the builder's own Update. If that
+// forwarded key advances the builder to its done stage, the resulting
+// loop is saved via Options.SaveLoopFn and the fleet view is shown with
+// the outcome in builderMsg. The builder's own tea.Quit (it is designed
+// to run standalone in the CLI's `looper new`) is swallowed here — it
+// must not quit the embedding fleet program.
+func (m Model) handleBuilderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.builder = builder.Model{}
+		m.view = viewFleet
+		return m, nil
+	}
+
+	next, cmd := m.builder.Update(msg)
+	m.builder = next.(builder.Model)
+
+	if m.builder.Done() {
+		loop, _ := m.builder.Loop()
+		m.builderMsg = m.saveLoop(loop)
+		m.builder = builder.Model{}
+		m.view = viewFleet
+		return m, nil
+	}
+
+	return m, cmd
+}
+
+// saveLoop persists loop via Options.SaveLoopFn and formats the outcome
+// for display in the fleet view's builderMsg line.
+func (m Model) saveLoop(loop *config.Loop) string {
+	if m.opts.SaveLoopFn == nil {
+		return ""
+	}
+	path, err := m.opts.SaveLoopFn(loop)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err)
+	}
+	return fmt.Sprintf("saved %s", path)
+}
+
 // focusedRow returns the worker row currently focused, and whether one is
 // focused at all.
 func (m Model) focusedRow() (workerRow, bool) {
@@ -269,12 +334,16 @@ func glyph(row workerRow) string {
 	}
 }
 
-// View implements tea.Model, rendering the fleet or focus view.
+// View implements tea.Model, rendering the fleet, focus, or builder view.
 func (m Model) View() string {
-	if m.view == viewFocus {
+	switch m.view {
+	case viewFocus:
 		return m.viewFocus()
+	case viewBuilder:
+		return m.viewBuilder()
+	default:
+		return m.viewFleet()
 	}
-	return m.viewFleet()
 }
 
 // viewFleet renders the header badge and a table of worker rows, sorted
@@ -288,6 +357,9 @@ func (m Model) viewFleet() string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "looper · %d runs · %d NEED YOU\n\n", len(runs), m.NeedYouCount())
+	if m.builderMsg != "" {
+		fmt.Fprintf(&b, "%s\n\n", m.builderMsg)
+	}
 	for i, r := range rows {
 		cursor := "  "
 		if i == m.cursor {
@@ -295,7 +367,7 @@ func (m Model) viewFleet() string {
 		}
 		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
 	}
-	b.WriteString("\n[up/down] move  [enter] focus  [q] quit\n")
+	b.WriteString("\n[up/down] move  [enter] focus  [n] new loop  [q] quit\n")
 	return b.String()
 }
 
@@ -317,6 +389,17 @@ func (m Model) viewFocus() string {
 		b.WriteString("\n[a] attach\n")
 	}
 	b.WriteString("\n[esc] back  [q] quit\n")
+	return b.String()
+}
+
+// viewBuilder renders the embedded guided loop builder: its own
+// prompt/input, plus a footer for the cancel/quit keys the builder
+// package itself has no concept of (cancellation is a fleet-TUI-level
+// concern layered on top of the unmodified builder).
+func (m Model) viewBuilder() string {
+	var b strings.Builder
+	b.WriteString(m.builder.View())
+	b.WriteString("\n[esc] cancel  [ctrl+c] quit\n")
 	return b.String()
 }
 
