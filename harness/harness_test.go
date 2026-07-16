@@ -49,6 +49,29 @@ func TestBuildHeadless_EmptyHeadlessErrors(t *testing.T) {
 	}
 }
 
+func TestBuildStepAuthoring(t *testing.T) {
+	h := config.Harness{Interactive: []string{"claude"}}
+	argv, err := BuildStepAuthoring(h, "do the thing", "/cache/looper/plugin")
+	if err != nil {
+		t.Fatalf("BuildStepAuthoring: %v", err)
+	}
+	want := []string{"claude", "--plugin-dir", "/cache/looper/plugin", "do the thing"}
+	if len(argv) != len(want) {
+		t.Fatalf("argv = %v, want %v", argv, want)
+	}
+	for i := range want {
+		if argv[i] != want[i] {
+			t.Errorf("argv[%d] = %q, want %q", i, argv[i], want[i])
+		}
+	}
+}
+
+func TestBuildStepAuthoring_NoInteractiveCommandErrors(t *testing.T) {
+	if _, err := BuildStepAuthoring(config.Harness{}, "p", "/dir"); err == nil {
+		t.Fatal("expected an error for a harness with no interactive command")
+	}
+}
+
 func TestSentinelVars(t *testing.T) {
 	h := config.Harness{Sentinels: config.Sentinels{
 		NeedsInput: "NI",
