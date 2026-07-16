@@ -29,6 +29,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newStopCmd())
 	root.AddCommand(newAttachCmd())
 	root.AddCommand(newTuiCmd())
+	root.AddCommand(newNewCmd())
+	root.AddCommand(newEditCmd())
 	root.Flags().StringVar(&socket, "socket", client.SocketPath(), "path to looperd's Unix socket")
 	return root
 }
