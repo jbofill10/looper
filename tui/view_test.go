@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jbofill10/looper/config"
 )
 
 // key builds a synthetic tea.KeyMsg for the given single-character or named
@@ -197,5 +199,103 @@ func TestView_QuitKeys(t *testing.T) {
 	_, cmd2 := press(t, m, "ctrl+c")
 	if cmd2 == nil {
 		t.Fatalf("'ctrl+c' did not return a command")
+	}
+}
+
+// typeRunes feeds each character of s to m as individual key presses,
+// simulating a user typing s into the current builder field.
+func typeRunes(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m, _ = press(t, m, string(r))
+	}
+	return m
+}
+
+func TestView_NewLoopKeyEntersBuilder(t *testing.T) {
+	m := twoWorkerModel()
+	m, _ = press(t, m, "n")
+	if m.view != viewBuilder {
+		t.Fatalf("view = %v, want viewBuilder", m.view)
+	}
+	out := m.View()
+	if !strings.Contains(out, "Loop name:") {
+		t.Fatalf("builder view missing prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "[esc] cancel") {
+		t.Fatalf("builder view missing cancel hint:\n%s", out)
+	}
+}
+
+func TestView_EscCancelsBuilderWithoutSaving(t *testing.T) {
+	called := false
+	m := NewModel(Options{
+		SaveLoopFn: func(loop *config.Loop) (string, error) {
+			called = true
+			return "unused", nil
+		},
+	})
+	m, _ = press(t, m, "n")
+	m = typeRunes(t, m, "abandoned")
+	m, _ = press(t, m, "esc")
+
+	if m.view != viewFleet {
+		t.Fatalf("view = %v, want viewFleet after esc", m.view)
+	}
+	if called {
+		t.Fatalf("SaveLoopFn was called despite cancelling with esc")
+	}
+}
+
+func TestView_CtrlCQuitsFromBuilder(t *testing.T) {
+	m := NewModel(Options{})
+	m, _ = press(t, m, "n")
+	_, cmd := press(t, m, "ctrl+c")
+	if cmd == nil {
+		t.Fatalf("ctrl+c from builder view did not return a command")
+	}
+}
+
+func TestView_CompletingBuilderSavesAndReturnsToFleet(t *testing.T) {
+	var savedLoop *config.Loop
+	m := NewModel(Options{
+		SaveLoopFn: func(loop *config.Loop) (string, error) {
+			savedLoop = loop
+			return "/tmp/.looper/loops/" + loop.Name + ".yaml", nil
+		},
+	})
+
+	m, _ = press(t, m, "n") // enter builder
+
+	m = typeRunes(t, m, "dev-loop")
+	m, _ = press(t, m, "enter") // name
+
+	m, _ = press(t, m, "enter") // concurrency blank => 1
+
+	m = typeRunes(t, m, "get-task")
+	m, _ = press(t, m, "enter") // step name
+
+	m = typeRunes(t, m, "manual")
+	m, _ = press(t, m, "enter") // step type
+
+	m, _ = press(t, m, "enter") // outputs blank
+
+	m, _ = press(t, m, "enter") // add another? blank => no => builder done
+
+	if m.view != viewFleet {
+		t.Fatalf("view = %v, want viewFleet after builder completes", m.view)
+	}
+	if savedLoop == nil || savedLoop.Name != "dev-loop" {
+		t.Fatalf("SaveLoopFn called with %+v, want loop named dev-loop", savedLoop)
+	}
+	if !strings.Contains(m.View(), "saved /tmp/.looper/loops/dev-loop.yaml") {
+		t.Fatalf("fleet view missing save confirmation:\n%s", m.View())
+	}
+}
+
+func TestView_FleetFooterMentionsNewLoopKey(t *testing.T) {
+	m := twoWorkerModel()
+	if !strings.Contains(m.View(), "[n] new loop") {
+		t.Fatalf("fleet footer missing new-loop hint:\n%s", m.View())
 	}
 }

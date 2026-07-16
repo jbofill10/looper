@@ -2,12 +2,15 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jbofill10/looper/client"
+	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/rpc"
 )
 
@@ -22,18 +25,39 @@ const rpcTimeout = 5 * time.Second
 func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 	defer conn.Close()
 
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getting working directory: %w", err)
+	}
+
 	var p *tea.Program
 	model := NewModel(Options{
-		RespondFn: respondFn(ctx, cl),
-		AttachFn:  attachFn(ctx, cl, &p),
+		RespondFn:  respondFn(ctx, cl),
+		AttachFn:   attachFn(ctx, cl, &p),
+		SaveLoopFn: saveLoopFn(wd),
 	})
 	p = tea.NewProgram(model)
 
 	go sendRunsSnapshot(ctx, p, cl)
 	go streamUpdates(ctx, p, cl)
 
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
+}
+
+// saveLoopFn returns the Options.SaveLoopFn implementation used by the
+// running fleet TUI: it saves loop to <dir>/.looper/loops/<name>.yaml via
+// config.SaveLoop, mirroring cli/build.go's buildAndSave (duplicated here
+// rather than shared, since cli already imports tui and importing the
+// other way would cycle).
+func saveLoopFn(dir string) func(loop *config.Loop) (string, error) {
+	return func(loop *config.Loop) (string, error) {
+		path := filepath.Join(dir, ".looper", "loops", loop.Name+".yaml")
+		if err := config.SaveLoop(loop, path); err != nil {
+			return "", err
+		}
+		return path, nil
+	}
 }
 
 // respondFn returns the Options.RespondFn implementation: it delivers a
