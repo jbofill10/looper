@@ -149,6 +149,9 @@ type Options struct {
 	RunLoopOnceFn func(loopName string) tea.Cmd
 	// StopLoopGracefulFn lets a run finish its current iteration, then stops it.
 	StopLoopGracefulFn func(runID string) tea.Cmd
+	// AbortLoopFn hard-stops a run immediately (may interrupt an in-flight
+	// step), reusing the pre-existing StopLoop RPC.
+	AbortLoopFn func(runID string) tea.Cmd
 	// RenameLoopFn renames a loop.
 	RenameLoopFn func(loopName, newName string) tea.Cmd
 	// DeleteLoopFn deletes a loop.
@@ -188,6 +191,10 @@ type Model struct {
 	expandedLoop string // "" = no loop expanded
 	treeCursor   int    // cursor position within treeRows()
 	loopsFocused bool   // false (zero value) = up/down/enter drive the Workers table, exactly as before this task; true = the Loops tree
+
+	renamingLoop string // "" = not renaming; else the loop name being renamed
+	renameInput  string
+	deletingLoop string // "" = no delete confirmation pending; else the loop name
 }
 
 // treeRow is one row of the Loops section's tree: either a loop header row
@@ -234,6 +241,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.renamingLoop != "" {
+			return m.handleRenameKey(msg)
+		}
+		if m.deletingLoop != "" {
+			return m.handleDeleteConfirmKey(msg)
+		}
 		if m.view == viewBuilder {
 			return m.handleBuilderKey(msg)
 		}
@@ -330,9 +343,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.builderMsg = ""
 			m.view = viewBuilder
 		}
-	case "a", "r", "x":
+	case "a", "r":
 		if m.view == viewFocus {
 			return m.handleFocusKey(msg.String())
+		}
+	case "x":
+		// "x" is shared: focus-view decision-abort (a/r/x) and the Loops
+		// tree's hard-abort key. The two conditions are mutually exclusive
+		// (view can't be both viewFocus and viewFleet), so they're merged
+		// into a single case — Go forbids a duplicate case value in the
+		// same switch, which the brief's literal `case "a", "r", "x":` /
+		// `case "t", "o", "g", "x", "R", "D":` split would have produced.
+		if m.view == viewFocus {
+			return m.handleFocusKey(msg.String())
+		}
+		if m.view == viewFleet && m.loopsFocused {
+			return m.handleLoopRowKey(msg.String())
+		}
+	case "t", "o", "g", "R", "D":
+		if m.view == viewFleet && m.loopsFocused {
+			return m.handleLoopRowKey(msg.String())
 		}
 	}
 	return m, nil
@@ -368,6 +398,89 @@ func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
 
 	if k == "a" && m.opts.AttachFn != nil {
 		return m, m.opts.AttachFn(row.RunID)
+	}
+	return m, nil
+}
+
+// handleLoopRowKey implements the Loops-section loop-row action keys: t
+// toggles enabled, o runs once, g gracefully stops an active run, x hard-
+// aborts one, R begins a rename, D begins a delete confirmation. All are
+// no-ops when the cursor isn't on a loop row, and g/x are additionally
+// no-ops when that loop has no active run.
+func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
+	rows := m.treeRows()
+	if m.treeCursor >= len(rows) || rows[m.treeCursor].Kind != "loop" {
+		return m, nil
+	}
+	loop, ok := m.loopByName(rows[m.treeCursor].LoopName)
+	if !ok {
+		return m, nil
+	}
+
+	switch k {
+	case "t":
+		if m.opts.SetLoopEnabledFn != nil {
+			return m, m.opts.SetLoopEnabledFn(loop.Name, !loop.Enabled)
+		}
+	case "o":
+		if m.opts.RunLoopOnceFn != nil {
+			return m, m.opts.RunLoopOnceFn(loop.Name)
+		}
+	case "g":
+		if loop.RunID != "" && m.opts.StopLoopGracefulFn != nil {
+			return m, m.opts.StopLoopGracefulFn(loop.RunID)
+		}
+	case "x":
+		if loop.RunID != "" && m.opts.AbortLoopFn != nil {
+			return m, m.opts.AbortLoopFn(loop.RunID)
+		}
+	case "R":
+		m.renamingLoop = loop.Name
+		m.renameInput = loop.Name
+	case "D":
+		m.deletingLoop = loop.Name
+	}
+	return m, nil
+}
+
+// handleRenameKey handles the rename-loop input stage entered via R:
+// printable runes append to renameInput, backspace removes the last rune,
+// esc cancels, enter confirms and invokes RenameLoopFn.
+func (m Model) handleRenameKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.renamingLoop = ""
+		m.renameInput = ""
+		return m, nil
+	case "backspace":
+		if r := []rune(m.renameInput); len(r) > 0 {
+			m.renameInput = string(r[:len(r)-1])
+		}
+		return m, nil
+	case "enter":
+		newName := strings.TrimSpace(m.renameInput)
+		oldName := m.renamingLoop
+		m.renamingLoop = ""
+		m.renameInput = ""
+		if newName == "" || m.opts.RenameLoopFn == nil {
+			return m, nil
+		}
+		return m, m.opts.RenameLoopFn(oldName, newName)
+	}
+	if key.Type == tea.KeyRunes {
+		m.renameInput += string(key.Runes)
+	}
+	return m, nil
+}
+
+// handleDeleteConfirmKey handles the delete-loop confirmation stage
+// entered via D: y confirms and invokes DeleteLoopFn, any other key
+// cancels.
+func (m Model) handleDeleteConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	name := m.deletingLoop
+	m.deletingLoop = ""
+	if key.String() == "y" && m.opts.DeleteLoopFn != nil {
+		return m, m.opts.DeleteLoopFn(name)
 	}
 	return m, nil
 }
@@ -429,6 +542,12 @@ func glyph(row workerRow) string {
 
 // View implements tea.Model, rendering the fleet, focus, or builder view.
 func (m Model) View() string {
+	switch {
+	case m.renamingLoop != "":
+		return m.viewRenameLoop()
+	case m.deletingLoop != "":
+		return m.viewDeleteConfirm()
+	}
 	switch m.view {
 	case viewFocus:
 		return m.viewFocus()
@@ -496,7 +615,24 @@ func (m Model) viewFleet() string {
 		}
 		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
 	}
-	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] focus  [n] new loop  [q] quit") + "\n")
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [tab] switch focus  [space] expand/collapse  [enter] focus  [t] toggle  [o] run once  [g] graceful stop  [x] abort  [R] rename  [D] delete  [n] new loop  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewRenameLoop renders the rename-loop input prompt entered via R.
+func (m Model) viewRenameLoop() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Rename loop %q", m.renamingLoop)))
+	fmt.Fprintf(&b, "%s %s\n", style.Label.Render("New name:"), m.renameInput)
+	b.WriteString("\n" + style.KeyHint.Render("[enter] confirm  [esc] cancel") + "\n")
+	return b.String()
+}
+
+// viewDeleteConfirm renders the delete-loop confirmation prompt entered via D.
+func (m Model) viewDeleteConfirm() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.TitleAlert.Render(fmt.Sprintf("Delete loop %q?", m.deletingLoop)))
+	b.WriteString("\n" + style.KeyHint.Render("[y] confirm  [any other key] cancel") + "\n")
 	return b.String()
 }
 

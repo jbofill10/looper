@@ -298,3 +298,62 @@ func TestView_FleetShowsLoopsSection(t *testing.T) {
 		t.Errorf("View() = %q, want a Loops section listing jira-tracker as [on]", out)
 	}
 }
+
+func TestView_ToggleEnabledKeyInvokesSetLoopEnabledFn(t *testing.T) {
+	var gotName string
+	var gotEnabled bool
+	m := NewModel(Options{
+		SetLoopEnabledFn: func(name string, enabled bool) tea.Cmd {
+			gotName, gotEnabled = name, enabled
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", Enabled: false}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // loop-row keys require the Loops tree focused
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	if gotName != "a" || gotEnabled != true {
+		t.Errorf("SetLoopEnabledFn called with (%q, %v), want (\"a\", true)", gotName, gotEnabled)
+	}
+}
+
+func TestView_RunOnceKeyInvokesRunLoopOnceFn(t *testing.T) {
+	var got string
+	m := NewModel(Options{RunLoopOnceFn: func(name string) tea.Cmd { got = name; return nil }})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a"}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got != "a" {
+		t.Errorf("RunLoopOnceFn called with %q, want \"a\"", got)
+	}
+}
+
+func TestView_GracefulAndHardStopKeysOnlyActWithAnActiveRun(t *testing.T) {
+	var gracefulCalled, abortCalled bool
+	m := NewModel(Options{
+		StopLoopGracefulFn: func(runID string) tea.Cmd { gracefulCalled = true; return nil },
+		AbortLoopFn:        func(runID string) tea.Cmd { abortCalled = true; return nil },
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a"}}) // no RunID: not running
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if gracefulCalled || abortCalled {
+		t.Errorf("graceful/hard stop must be no-ops on a non-running loop")
+	}
+
+	next, _ = m.Update(LoopsSnapshotMsg{{Name: "a", RunID: "run-001"}}) // loopsFocused survives this update
+	m = next.(Model)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	if !gracefulCalled {
+		t.Errorf("'g' on a running loop must call StopLoopGracefulFn")
+	}
+}

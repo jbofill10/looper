@@ -53,6 +53,7 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 		SetLoopEnabledFn:   setLoopEnabledFn(ctx, cl, baseDir, wd),
 		RunLoopOnceFn:      runLoopOnceFn(ctx, cl, baseDir, wd),
 		StopLoopGracefulFn: stopLoopGracefulFn(ctx, cl, baseDir),
+		AbortLoopFn:        abortLoopFn(ctx, cl, baseDir),
 		RenameLoopFn:       renameLoopFn(ctx, cl, baseDir),
 		DeleteLoopFn:       deleteLoopFn(ctx, cl, baseDir),
 	})
@@ -343,6 +344,23 @@ func stopLoopGracefulFn(ctx context.Context, cl rpc.LooperClient, baseDir string
 			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 			defer cancel()
 			_, err := cl.StopLoopGraceful(rctx, &rpc.StopLoopGracefulRequest{RunId: runID})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()
+		}
+	}
+}
+
+// abortLoopFn returns the Options.AbortLoopFn implementation: an
+// immediate hard stop via the pre-existing StopLoop RPC (may interrupt an
+// in-flight step), as opposed to StopLoopGracefulFn's finish-then-stop.
+func abortLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func(string) tea.Cmd {
+	return func(runID string) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.StopLoop(rctx, &rpc.StopLoopRequest{RunId: runID})
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
