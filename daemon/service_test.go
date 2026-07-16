@@ -295,3 +295,86 @@ func TestService_StreamStateUnsubscribesOnClientDisconnect(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// TestService_ConcurrencyPropagatesToWorkerFields exercises the gRPC surface
+// added for concurrency: StartLoopRequest.Concurrency reaches the Manager,
+// StateUpdate.worker_id/task are populated on the stream, and
+// ListRuns/RunInfo.workers reflects the per-worker table.
+func TestService_ConcurrencyPropagatesToWorkerFields(t *testing.T) {
+	client := startTestServer(t)
+	dir := t.TempDir()
+	path := writeLoopYAML(t, dir, "l", map[string]any{
+		"concurrency":    2,
+		"max_iterations": 1,
+		"steps": []map[string]any{
+			{"name": "gate", "type": "manual"},
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	startResp, err := client.StartLoop(ctx, &rpc.StartLoopRequest{
+		LoopFile:    path,
+		BaseDir:     filepath.Join(dir, ".looper"),
+		Workdir:     dir,
+		Concurrency: 2,
+	})
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	stream, err := client.StreamState(ctx, &rpc.StreamStateRequest{RunId: startResp.RunId})
+	if err != nil {
+		t.Fatalf("StreamState: %v", err)
+	}
+
+	reqByWorker := map[string]string{}
+	for len(reqByWorker) < 2 {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "decision_request" {
+			if u.WorkerId == "" {
+				t.Fatalf("decision_request missing worker_id: %+v", u)
+			}
+			reqByWorker[u.WorkerId] = u.RequestId
+		}
+	}
+
+	for _, reqID := range reqByWorker {
+		if _, err := client.RespondDecision(ctx, &rpc.RespondDecisionRequest{
+			RunId: startResp.RunId, RequestId: reqID, Outcome: "advance",
+		}); err != nil {
+			t.Fatalf("RespondDecision: %v", err)
+		}
+	}
+
+	for {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "run_done" {
+			if u.State != "done" {
+				t.Errorf("run_done State = %q, want done", u.State)
+			}
+			break
+		}
+	}
+
+	listResp, err := client.ListRuns(ctx, &rpc.ListRunsRequest{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(listResp.Runs) != 1 {
+		t.Fatalf("ListRuns = %+v, want 1 run", listResp.Runs)
+	}
+	if len(listResp.Runs[0].Workers) != 2 {
+		t.Fatalf("Workers = %+v, want 2 entries", listResp.Runs[0].Workers)
+	}
+	ids := map[string]bool{}
+	for _, w := range listResp.Runs[0].Workers {
+		ids[w.WorkerId] = true
+	}
+	for _, want := range []string{"w1", "w2"} {
+		if !ids[want] {
+			t.Errorf("missing worker %q in %+v", want, listResp.Runs[0].Workers)
+		}
+	}
+}
