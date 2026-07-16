@@ -77,6 +77,93 @@ func TestLoopsCLIIntegration(t *testing.T) {
 	t.Fatalf("socket %s still exists after shutdown", socketPath)
 }
 
+// TestLoopsCLIIntegration_Concurrency is a smoke test that drives the built
+// looper binary with `start --concurrency 2` against a script loop whose
+// get-task pulls from a shared counter file: it asserts the run streams
+// worker-tagged lines, exits 0, both workers' iteration run dirs exist, and
+// `looper ls` shows two worker rows.
+func TestLoopsCLIIntegration_Concurrency(t *testing.T) {
+	binPath := buildLooperBinary(t)
+
+	repo := t.TempDir()
+	loopDir := filepath.Join(repo, ".looper", "loops")
+	if err := os.MkdirAll(loopDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	counter := filepath.Join(repo, "counter")
+	sink := filepath.Join(repo, "sink")
+	loopYAML := "name: t\n" +
+		"concurrency: 2\n" +
+		"steps:\n" +
+		"  - name: get-task\n" +
+		"    type: script\n" +
+		"    signals_no_work: true\n" +
+		"    outputs: [TASK_ID]\n" +
+		"    run: |\n" +
+		"      n=$(cat " + counter + " 2>/dev/null || echo 0)\n" +
+		"      n=$((n+1))\n" +
+		"      echo $n > " + counter + "\n" +
+		"      if [ $n -gt 4 ]; then exit 78; fi\n" +
+		"      echo $n >> " + sink + "\n" +
+		"      echo TASK_ID=$n >> \"$LOOPER_OUTPUT\"\n" +
+		"  - name: work\n" +
+		"    type: script\n" +
+		"    run: \"true\"\n"
+	if err := os.WriteFile(filepath.Join(loopDir, "t.yaml"), []byte(loopYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "looper.sock")
+	t.Cleanup(func() {
+		exec.Command(binPath, "shutdown", "--socket", socketPath).Run()
+	})
+
+	startCmd := exec.Command(binPath, "start", "t", "--concurrency", "2", "--socket", socketPath)
+	startCmd.Dir = repo
+	startOut, err := startCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("looper start --concurrency 2 failed: %v\n%s", err, startOut)
+	}
+	if !strings.Contains(string(startOut), "run done") {
+		t.Errorf("start output missing terminal status; got:\n%s", startOut)
+	}
+	if !strings.Contains(string(startOut), "w1 · ") || !strings.Contains(string(startOut), "w2 · ") {
+		t.Errorf("start output missing worker-tagged lines for both workers; got:\n%s", startOut)
+	}
+
+	for _, wid := range []string{"w1", "w2"} {
+		entries, _ := os.ReadDir(filepath.Join(repo, ".looper", "runs", "t", wid))
+		if len(entries) == 0 {
+			t.Errorf("expected at least one iteration run dir under .looper/runs/t/%s", wid)
+		}
+	}
+
+	sinkData, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatalf("read sink: %v", err)
+	}
+	lines := strings.Fields(strings.TrimSpace(string(sinkData)))
+	seen := map[string]bool{}
+	for _, l := range lines {
+		if seen[l] {
+			t.Fatalf("task %q pulled more than once; sink: %q", l, sinkData)
+		}
+		seen[l] = true
+	}
+	if len(seen) != 4 {
+		t.Fatalf("got %d distinct tasks pulled, want 4; sink: %q", len(seen), sinkData)
+	}
+
+	lsCmd := exec.Command(binPath, "ls", "--socket", socketPath)
+	lsOut, err := lsCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("looper ls failed: %v\n%s", err, lsOut)
+	}
+	if !strings.Contains(string(lsOut), "w1") || !strings.Contains(string(lsOut), "w2") {
+		t.Errorf("ls output missing per-worker rows; got:\n%s", lsOut)
+	}
+}
+
 // TestLsCmd_NoDaemonRunning verifies `looper ls` never spawns the daemon and
 // exits 0 with a friendly message when it's unreachable.
 func TestLsCmd_NoDaemonRunning(t *testing.T) {

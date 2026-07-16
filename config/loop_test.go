@@ -79,3 +79,40 @@ func TestValidate_DefaultsConcurrency(t *testing.T) {
 		t.Errorf("concurrency = %d, want default 1", l.Concurrency)
 	}
 }
+
+func TestValidate_DefaultsTaskVar(t *testing.T) {
+	l := &Loop{Name: "x", Steps: []Step{{Name: "a", Type: StepManual}}}
+	if err := l.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if l.TaskVar != "TASK_ID" {
+		t.Errorf("task_var = %q, want default TASK_ID", l.TaskVar)
+	}
+}
+
+func TestValidate_PreservesExplicitTaskVar(t *testing.T) {
+	l := &Loop{Name: "x", TaskVar: "ISSUE_ID", Steps: []Step{{Name: "a", Type: StepManual}}}
+	if err := l.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if l.TaskVar != "ISSUE_ID" {
+		t.Errorf("task_var = %q, want ISSUE_ID (unchanged)", l.TaskVar)
+	}
+}
+
+func TestLoadLoop_TaskVarFromYAML(t *testing.T) {
+	p := writeTemp(t, `
+name: dev-loop
+task_var: ISSUE_ID
+steps:
+  - name: a
+    type: manual
+`)
+	loop, err := LoadLoop(p)
+	if err != nil {
+		t.Fatalf("LoadLoop: %v", err)
+	}
+	if loop.TaskVar != "ISSUE_ID" {
+		t.Errorf("task_var = %q, want ISSUE_ID", loop.TaskVar)
+	}
+}

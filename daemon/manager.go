@@ -26,6 +26,13 @@ type Update struct {
 	Message   string
 	RequestID string
 	Options   []string
+
+	// WorkerID identifies which worker this update is about; empty for a
+	// single-worker run (concurrency=1, the default) preserves prior
+	// behavior.
+	WorkerID string
+	// Task is the worker's current work unit (its task var's value).
+	Task string
 }
 
 // RunInfo is a point-in-time snapshot of one run's status.
@@ -37,6 +44,21 @@ type RunInfo struct {
 	CurrentStep string
 	State       string
 	Err         string
+	// Workers is a stable (by worker id), point-in-time snapshot of each
+	// worker's status. Empty for a run whose workers haven't been recorded
+	// yet.
+	Workers []WorkerInfo
+}
+
+// WorkerInfo is a point-in-time snapshot of one worker's status within a
+// run.
+type WorkerInfo struct {
+	WorkerID    string
+	Task        string
+	Iteration   int
+	CurrentStep string
+	State       string
+	Status      string // running | done | stopped | error
 }
 
 // subscriber is one Subscribe call's channel. Sends and close are
@@ -77,12 +99,30 @@ type pendingRequest struct {
 	update  Update
 }
 
+// workerState tracks one worker's latest reported status within a run.
+type workerState struct {
+	task        string
+	iteration   int
+	currentStep string
+	state       string
+	status      string // running | done | stopped | error
+}
+
 // runEntry tracks one active or finished run.
 type runEntry struct {
 	info    RunInfo
 	cancel  context.CancelFunc
 	fanIn   chan Update // internal buffer; drained by a per-run fanout goroutine
 	pending map[string]*pendingRequest
+
+	// workers, workersRemaining, and firstErr are guarded by Manager.mu
+	// (the same lock that guards info and pending), so a worker's
+	// completion handler can atomically update per-worker state, decrement
+	// the remaining count, and decide whether it is the last worker to
+	// finish (and so must finalize the run) without a separate lock.
+	workers          map[string]*workerState
+	workersRemaining int
+	firstErr         error // first non-cancellation error from any worker
 
 	sessMu  sync.Mutex
 	session *pty.Session // the run's live interactive session, if any
@@ -162,11 +202,12 @@ func newCounter(prefix string) func() string {
 
 // StartLoop loads and validates the loop (from loopFile, or
 // baseDir/loops/loopName.yaml if loopFile is empty) and launches it as a new
-// run. Interactive steps run inside the daemon: each session is registered
-// on the run (see Manager.Session) for a client to attach to, rather than
-// being auto-attached to the daemon's own stdio. It returns the new run's
-// id.
-func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string) (string, error) {
+// run of concurrency workers (0 uses the loop's configured concurrency,
+// clamped to [1, loop.MaxConcurrency]). Interactive steps run inside the
+// daemon: each session is registered on the run (see Manager.Session) for a
+// client to attach to, rather than being auto-attached to the daemon's own
+// stdio. It returns the new run's id.
+func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string, concurrency int) (string, error) {
 	path := loopFile
 	if path == "" {
 		if loopName == "" {
@@ -179,47 +220,79 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string) (string
 		return "", err
 	}
 
+	n := concurrency
+	if n <= 0 {
+		n = loop.Concurrency
+	}
+	if n < 1 {
+		n = 1
+	}
+	if loop.MaxConcurrency > 0 && n > loop.MaxConcurrency {
+		n = loop.MaxConcurrency
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	m.mu.Lock()
 	runID := m.newID()
 	re := &runEntry{
-		info:    RunInfo{RunID: runID, LoopName: loop.Name, Status: "running"},
-		cancel:  cancel,
-		fanIn:   make(chan Update, 256),
-		pending: map[string]*pendingRequest{},
+		info:             RunInfo{RunID: runID, LoopName: loop.Name, Status: "running"},
+		cancel:           cancel,
+		fanIn:            make(chan Update, 256),
+		pending:          map[string]*pendingRequest{},
+		workers:          map[string]*workerState{},
+		workersRemaining: n,
 	}
 	m.runs[runID] = re
 	m.mu.Unlock()
 
 	go m.fanout(runID, re.fanIn)
 
-	prompter := &remotePrompter{mgr: m, runID: runID, ctx: ctx}
-	w := &runner.Worker{
-		Loop:      loop,
-		BaseDir:   baseDir,
-		Workdir:   workdir,
-		Prompter:  prompter,
-		Global:    m.global,
-		LooperBin: m.looperBin,
-		Ctx:       ctx,
-		InteractiveRun: func(argv, env []string, socketPath string) error {
-			return m.runInteractiveSession(ctx, re, runID, argv, env)
-		},
-		OnReport: func(r runner.Report) {
-			m.onReport(runID, loop.Name, r)
-		},
-	}
+	// acquireLock is shared by every worker of this run so that steps with
+	// signals_no_work (task acquisition) are serialized across workers:
+	// two workers never pull concurrently.
+	acquireLock := &sync.Mutex{}
 
-	go m.runWorker(runID, ctx, w)
+	for i := 1; i <= n; i++ {
+		workerID := fmt.Sprintf("w%d", i)
+
+		m.mu.Lock()
+		re.workers[workerID] = &workerState{status: "running"}
+		m.mu.Unlock()
+
+		prompter := &remotePrompter{mgr: m, runID: runID, ctx: ctx, workerID: workerID}
+		w := &runner.Worker{
+			Loop:        loop,
+			BaseDir:     baseDir,
+			Workdir:     workdir,
+			Prompter:    prompter,
+			Global:      m.global,
+			LooperBin:   m.looperBin,
+			Ctx:         ctx,
+			ID:          workerID,
+			TaskVar:     loop.TaskVar,
+			AcquireLock: acquireLock,
+			InteractiveRun: func(argv, env []string, socketPath string) error {
+				return m.runInteractiveSession(ctx, re, runID, argv, env)
+			},
+			OnReport: func(r runner.Report) {
+				m.onReport(runID, loop.Name, r)
+			},
+		}
+
+		go m.runWorker(runID, workerID, ctx, w)
+	}
 
 	return runID, nil
 }
 
-// runWorker runs w to completion, records the run's final status, publishes
-// a run_done Update, and closes the run's internal fan-in channel (which
-// lets its fanout goroutine exit).
-func (m *Manager) runWorker(runID string, ctx context.Context, w *runner.Worker) {
+// runWorker runs w to completion and records workerID's final status. Once
+// every worker of the run has finished, it computes the run's aggregate
+// status ("done" only if all workers succeeded; "stopped" if the run's
+// context was cancelled; "error" if any worker returned a non-cancellation
+// error), publishes a run_done Update, and closes the run's internal fan-in
+// channel (which lets its fanout goroutine exit).
+func (m *Manager) runWorker(runID, workerID string, ctx context.Context, w *runner.Worker) {
 	runErr := w.Run()
 
 	m.mu.Lock()
@@ -228,25 +301,50 @@ func (m *Manager) runWorker(runID string, ctx context.Context, w *runner.Worker)
 		m.mu.Unlock()
 		return
 	}
-	status := "done"
-	errStr := ""
-	switch {
-	case runErr == nil:
-		status = "done"
-	case ctx.Err() != nil:
-		status = "stopped"
-	default:
-		status = "error"
-		errStr = runErr.Error()
+
+	if ws, ok := re.workers[workerID]; ok {
+		switch {
+		case runErr == nil:
+			ws.status = "done"
+		case ctx.Err() != nil:
+			ws.status = "stopped"
+		default:
+			ws.status = "error"
+		}
 	}
-	re.info.Status = status
-	re.info.Err = errStr
-	loopName := re.info.LoopName
-	fanIn := re.fanIn
+	if runErr != nil && ctx.Err() == nil && re.firstErr == nil {
+		re.firstErr = runErr
+	}
+
+	re.workersRemaining--
+	var (
+		finalize       bool
+		status, errStr string
+		loopName       string
+		fanIn          chan Update
+	)
+	if re.workersRemaining == 0 {
+		finalize = true
+		switch {
+		case ctx.Err() != nil:
+			status = "stopped"
+		case re.firstErr != nil:
+			status = "error"
+			errStr = re.firstErr.Error()
+		default:
+			status = "done"
+		}
+		re.info.Status = status
+		re.info.Err = errStr
+		loopName = re.info.LoopName
+		fanIn = re.fanIn
+	}
 	m.mu.Unlock()
 
-	m.publish(Update{RunID: runID, Kind: "run_done", LoopName: loopName, State: status, Message: errStr})
-	close(fanIn)
+	if finalize {
+		m.publish(Update{RunID: runID, Kind: "run_done", LoopName: loopName, State: status, Message: errStr})
+		close(fanIn)
+	}
 }
 
 // StopLoop cancels the run's context, which causes its Worker to stop at
@@ -319,15 +417,40 @@ func workdirFromEnv(env []string) string {
 }
 
 // ListRuns returns a snapshot of all known runs, stable-sorted by run id.
+// Each run's Workers field is populated from its worker table, stable-sorted
+// by worker id.
 func (m *Manager) ListRuns() []RunInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	infos := make([]RunInfo, 0, len(m.runs))
 	for _, re := range m.runs {
-		infos = append(infos, re.info)
+		info := re.info
+		info.Workers = workersSnapshot(re.workers)
+		infos = append(infos, info)
 	}
 	sort.Slice(infos, func(i, j int) bool { return infos[i].RunID < infos[j].RunID })
 	return infos
+}
+
+// workersSnapshot converts a run's internal worker table into a
+// stable-sorted (by worker id) []WorkerInfo. Returns nil for an empty table.
+func workersSnapshot(workers map[string]*workerState) []WorkerInfo {
+	if len(workers) == 0 {
+		return nil
+	}
+	out := make([]WorkerInfo, 0, len(workers))
+	for id, ws := range workers {
+		out = append(out, WorkerInfo{
+			WorkerID:    id,
+			Task:        ws.task,
+			Iteration:   ws.iteration,
+			CurrentStep: ws.currentStep,
+			State:       ws.state,
+			Status:      ws.status,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].WorkerID < out[j].WorkerID })
+	return out
 }
 
 // Subscribe registers a new subscriber and returns its update channel (cap
@@ -421,7 +544,8 @@ func parseOutcome(outcome string) (runner.Outcome, error) {
 }
 
 // onReport translates a runner.Report into an Update, updates the run's
-// tracked status fields, and publishes it.
+// tracked status fields (both the run's aggregate view and, if the report
+// carries a WorkerID, that worker's entry), and publishes it.
 func (m *Manager) onReport(runID, loopName string, r runner.Report) {
 	if r.Kind == runner.ReportRunDone {
 		// runWorker publishes its own run_done Update once it knows the
@@ -439,12 +563,26 @@ func (m *Manager) onReport(runID, loopName string, r runner.Report) {
 		case runner.ReportOutcome:
 			re.info.State = r.State
 		}
+		if ws, ok := re.workers[r.WorkerID]; ok {
+			switch r.Kind {
+			case runner.ReportIteration:
+				ws.iteration = r.Iteration
+			case runner.ReportStepStart:
+				ws.currentStep = r.Step
+			case runner.ReportOutcome:
+				ws.state = r.State
+			}
+			if r.Task != "" {
+				ws.task = r.Task
+			}
+		}
 	}
 	m.mu.Unlock()
 
 	m.publish(Update{
 		RunID: runID, Kind: r.Kind, LoopName: loopName,
 		Iteration: r.Iteration, Step: r.Step, State: r.State, Message: r.Message,
+		WorkerID: r.WorkerID, Task: r.Task,
 	})
 }
 
@@ -485,11 +623,15 @@ func (m *Manager) fanout(runID string, fanIn chan Update) {
 // remotePrompter implements runner.Prompter by round-tripping decisions
 // through the Manager: it registers a pending request, publishes a
 // decision_request Update, and blocks until Manager.Respond delivers an
-// outcome or the run's context is cancelled.
+// outcome or the run's context is cancelled. Each worker of a run gets its
+// own remotePrompter (so its decision_request carries that worker's id),
+// but all of a run's remotePrompters share the run's pending map, keyed by
+// the globally-unique request id.
 type remotePrompter struct {
-	mgr   *Manager
-	runID string
-	ctx   context.Context
+	mgr      *Manager
+	runID    string
+	ctx      context.Context
+	workerID string
 }
 
 func (p *remotePrompter) AskFailure(step config.Step, exitCode int) (runner.Outcome, error) {
@@ -523,6 +665,7 @@ func (p *remotePrompter) ask(step config.Step) (runner.Outcome, error) {
 	update := Update{
 		RunID: p.runID, Kind: "decision_request", LoopName: re.info.LoopName,
 		Step: step.Name, RequestID: reqID, Options: []string{"advance", "retry", "abort"},
+		WorkerID: p.workerID,
 	}
 	re.pending[reqID] = &pendingRequest{outcome: outcomeCh, update: update}
 	m.mu.Unlock()

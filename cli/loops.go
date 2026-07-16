@@ -27,6 +27,7 @@ const streamRPCTimeout = 5 * time.Second
 // the run finishes.
 func newStartCmd() *cobra.Command {
 	var file, socket string
+	var concurrency int
 	cmd := &cobra.Command{
 		Use:   "start [loop-name]",
 		Short: "Start a loop in the daemon and stream its progress",
@@ -58,10 +59,11 @@ func newStartCmd() *cobra.Command {
 
 			startCtx, startCancel := context.WithTimeout(cmd.Context(), streamRPCTimeout)
 			startResp, err := c.StartLoop(startCtx, &rpc.StartLoopRequest{
-				LoopName: loopName,
-				LoopFile: file,
-				BaseDir:  filepath.Join(wd, ".looper"),
-				Workdir:  wd,
+				LoopName:    loopName,
+				LoopFile:    file,
+				BaseDir:     filepath.Join(wd, ".looper"),
+				Workdir:     wd,
+				Concurrency: int32(concurrency),
 			})
 			startCancel()
 			if err != nil {
@@ -108,27 +110,44 @@ func newStartCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", "", "path to a loop YAML file (overrides loop-name)")
 	cmd.Flags().StringVar(&socket, "socket", client.SocketPath(), "path to looperd's Unix socket")
+	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "number of workers to run (0 = the loop's configured concurrency)")
 	return cmd
 }
 
-// printUpdate renders one state update as a concise, single-line summary.
+// workerPrefix renders "<worker-id> · " for a worker-tagged update, or ""
+// when u carries no worker id (single-worker run).
+func workerPrefix(u *rpc.StateUpdate) string {
+	if u.WorkerId == "" {
+		return ""
+	}
+	return u.WorkerId + " · "
+}
+
+// printUpdate renders one state update as a concise, single-line summary,
+// prefixed with the worker id when the update is worker-tagged.
 func printUpdate(out io.Writer, u *rpc.StateUpdate) {
+	prefix := workerPrefix(u)
 	switch u.Kind {
 	case "step_start":
-		fmt.Fprintf(out, "iter %d · %s · running\n", u.Iteration, u.Step)
+		fmt.Fprintf(out, "%siter %d · %s · running\n", prefix, u.Iteration, u.Step)
 	case "outcome":
-		fmt.Fprintf(out, "iter %d · %s · %s\n", u.Iteration, u.Step, u.State)
+		fmt.Fprintf(out, "%siter %d · %s · %s\n", prefix, u.Iteration, u.Step, u.State)
 	case "decision_request":
-		fmt.Fprintf(out, "iter %d · %s · awaiting decision\n", u.Iteration, u.Step)
+		fmt.Fprintf(out, "%siter %d · %s · awaiting decision\n", prefix, u.Iteration, u.Step)
 	case "run_done":
 		fmt.Fprintf(out, "run %s\n", u.State)
 	}
 }
 
 // promptDecision reads a single-letter choice from in ((a)dvance/(r)etry/
-// (x)abort) and returns the corresponding decision outcome string.
+// (x)abort) and returns the corresponding decision outcome string. The
+// prompt names which worker the decision is for when u is worker-tagged.
 func promptDecision(out io.Writer, in *bufio.Reader, u *rpc.StateUpdate) string {
-	fmt.Fprintf(out, "decision needed for step %q. [a]dvance / [r]etry / [x]abort: ", u.Step)
+	if u.WorkerId != "" {
+		fmt.Fprintf(out, "decision needed for %s, step %q. [a]dvance / [r]etry / [x]abort: ", u.WorkerId, u.Step)
+	} else {
+		fmt.Fprintf(out, "decision needed for step %q. [a]dvance / [r]etry / [x]abort: ", u.Step)
+	}
 	line, _ := in.ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "a", "advance", "":
@@ -175,6 +194,24 @@ func newLsCmd() *cobra.Command {
 			for _, r := range resp.Runs {
 				fmt.Fprintf(out, "%-16s %-16s %-10s %-6d %-16s %s\n",
 					r.RunId, r.LoopName, r.Status, r.Iteration, r.CurrentStep, r.State)
+			}
+
+			anyWorkers := false
+			for _, r := range resp.Runs {
+				if len(r.Workers) > 0 {
+					anyWorkers = true
+					break
+				}
+			}
+			if anyWorkers {
+				fmt.Fprintln(out)
+				fmt.Fprintf(out, "%-16s %-10s %-16s %-16s %s\n", "RUN", "WORKER", "TASK", "STEP", "STATE")
+				for _, r := range resp.Runs {
+					for _, w := range r.Workers {
+						fmt.Fprintf(out, "%-16s %-10s %-16s %-16s %s\n",
+							r.RunId, w.WorkerId, w.Task, w.CurrentStep, w.State)
+					}
+				}
 			}
 			return nil
 		},

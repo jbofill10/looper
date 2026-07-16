@@ -11,7 +11,7 @@ import (
 
 // StartLoop starts running a loop and returns its run id.
 func (s *Server) StartLoop(ctx context.Context, req *rpc.StartLoopRequest) (*rpc.StartLoopResponse, error) {
-	runID, err := s.manager.StartLoop(req.GetLoopName(), req.GetLoopFile(), req.GetBaseDir(), req.GetWorkdir())
+	runID, err := s.manager.StartLoop(req.GetLoopName(), req.GetLoopFile(), req.GetBaseDir(), req.GetWorkdir(), int(req.GetConcurrency()))
 	if err != nil {
 		return nil, err
 	}
@@ -39,9 +39,30 @@ func (s *Server) ListRuns(ctx context.Context, req *rpc.ListRunsRequest) (*rpc.L
 			CurrentStep: r.CurrentStep,
 			State:       r.State,
 			Error:       r.Err,
+			Workers:     workersToProto(r.Workers),
 		}
 	}
 	return &rpc.ListRunsResponse{Runs: out}, nil
+}
+
+// workersToProto maps a run's per-worker snapshot to its wire
+// representation.
+func workersToProto(workers []WorkerInfo) []*rpc.WorkerInfo {
+	if len(workers) == 0 {
+		return nil
+	}
+	out := make([]*rpc.WorkerInfo, len(workers))
+	for i, w := range workers {
+		out[i] = &rpc.WorkerInfo{
+			WorkerId:    w.WorkerID,
+			Task:        w.Task,
+			Iteration:   int32(w.Iteration),
+			CurrentStep: w.CurrentStep,
+			State:       w.State,
+			Status:      w.Status,
+		}
+	}
+	return out
 }
 
 // StreamState streams state updates for a run (or all runs if RunId is
@@ -151,5 +172,7 @@ func updateToProto(u Update) *rpc.StateUpdate {
 		Message:   u.Message,
 		RequestId: u.RequestID,
 		Options:   u.Options,
+		WorkerId:  u.WorkerID,
+		Task:      u.Task,
 	}
 }
