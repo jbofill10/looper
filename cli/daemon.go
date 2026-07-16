@@ -28,6 +28,9 @@ func newDaemonCmd() *cobra.Command {
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			srv := daemon.New()
+			for _, err := range srv.AutoResume() {
+				fmt.Fprintf(cmd.ErrOrStderr(), "auto-resume: %v\n", err)
+			}
 
 			// Install SIGINT/SIGTERM handling so Ctrl-C (or a controlled
 			// `kill`) stops the daemon gracefully: Stop() drains in-flight
