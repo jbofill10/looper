@@ -27,8 +27,12 @@ var (
 	Label = lipgloss.NewStyle().Foreground(Muted)
 	// Select styles a select field's "‹ option ›" value.
 	Select = lipgloss.NewStyle().Foreground(Accent)
-	// Action styles an actionable "[enter] Do thing" prompt.
+	// Action styles an actionable "[enter] Do thing" prompt when focused.
 	Action = lipgloss.NewStyle().Bold(true).Foreground(Accent)
+	// ActionInactive styles an actionable "[enter] Do thing" prompt when it
+	// isn't the focused field, so it reads as unavailable rather than as a
+	// second live keybinding.
+	ActionInactive = lipgloss.NewStyle().Foreground(Muted)
 	// KeyHint styles the dim keybinding legend shown in footers.
 	KeyHint = lipgloss.NewStyle().Foreground(Muted)
 	// SubHeader styles a section label like "Steps so far:".
