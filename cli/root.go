@@ -20,6 +20,7 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	root.AddCommand(newRunCmd())
+	root.AddCommand(newResumeCmd())
 	root.AddCommand(newHookCmd())
 	root.AddCommand(newDaemonCmd())
 	root.AddCommand(newPingCmd())

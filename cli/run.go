@@ -32,6 +32,11 @@ type RunOptions struct {
 	Workdir  string    // execution dir for workspace: shared
 	In       io.Reader // prompter input (defaults to os.Stdin)
 	Out      io.Writer // prompter/output (defaults to os.Stdout)
+
+	// ResumeDir, if set, is passed through to runner.Worker.ResumeDir: the
+	// first iteration resumes from that existing iteration directory
+	// instead of starting fresh. Used by `looper resume`.
+	ResumeDir string
 }
 
 // RunLoop loads a loop and runs it single-worker, in-process.
@@ -73,6 +78,7 @@ func RunLoop(opts RunOptions) error {
 		Prompter:  &runner.StdinPrompter{In: in, Out: out},
 		Global:    global,
 		LooperBin: looperBin,
+		ResumeDir: opts.ResumeDir,
 	}
 	fmt.Fprintf(out, "running loop %q\n", loop.Name)
 	if err := w.Run(); err != nil {
