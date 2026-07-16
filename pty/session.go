@@ -159,6 +159,36 @@ func (s *Session) Wait() error {
 	return nil
 }
 
+// RunAttached bridges in/out to s via Attach and waits for s to finish,
+// handling the one-shot local-attach case: the caller has no way to
+// reattach later, so if the human detaches (Ctrl-b d) while the child is
+// still running, that is treated as abandoning the session rather than as a
+// request to leave it running in the background — s is killed immediately
+// instead of being waited on indefinitely. If the child exits on its own
+// first, Attach's own s.readerDone branch returns promptly and RunAttached
+// simply reports the exit error.
+func (s *Session) RunAttached(in, out *os.File) error {
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- s.Wait() }()
+
+	attachDone := make(chan struct{})
+	go func() {
+		defer close(attachDone)
+		_ = s.Attach(in, out)
+	}()
+
+	var runErr error
+	select {
+	case runErr = <-waitCh:
+		<-attachDone
+	case <-attachDone:
+		_ = s.Close()
+		runErr = <-waitCh
+	}
+	_ = s.Close()
+	return runErr
+}
+
 // Close closes the pty and kills the child process if it is still running.
 // It is idempotent and safe to call multiple times.
 func (s *Session) Close() error {
