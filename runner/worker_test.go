@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/runctx"
 )
 
 // idSeq returns a deterministic id generator: "iter-1", "iter-2", ...
@@ -432,5 +433,173 @@ func TestWorker_UnknownStepTypeErrors(t *testing.T) {
 	_, err := w.executorFor(loop.Steps[0])
 	if err == nil || !strings.Contains(err.Error(), "unknown type") {
 		t.Fatalf("expected 'unknown type' error, got %v", err)
+	}
+}
+
+// resumeLoop returns a 2-step script loop: get-task (which would append a
+// marker to a sink file if it actually ran) and work (which records
+// TASK_ID's value to the same sink).
+func resumeLoop(sink string) *config.Loop {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps: []config.Step{
+			{
+				Name: "get-task", Type: config.StepScript,
+				Run:     fmt.Sprintf(`echo GOT_TASK >> %q; echo TASK_ID=99 >> "$LOOPER_OUTPUT"`, sink),
+				Outputs: []string{"TASK_ID"},
+			},
+			{
+				Name: "work", Type: config.StepScript,
+				Run: fmt.Sprintf(`echo "work saw TASK_ID=$TASK_ID" >> %q`, sink),
+			},
+		},
+	}
+	_ = loop.Validate()
+	return loop
+}
+
+func TestWorker_ResumeDir_SkipsCompletedSteps(t *testing.T) {
+	sink := filepath.Join(t.TempDir(), "sink")
+	loop := resumeLoop(sink)
+
+	resumeDir := filepath.Join(t.TempDir(), "iter-resumed")
+	rc, err := runctx.New(resumeDir)
+	if err != nil {
+		t.Fatalf("runctx.New: %v", err)
+	}
+	rc.Set("TASK_ID", "7")
+	rc.Set("WORKDIR", t.TempDir())
+	if err := rc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := rc.SaveProgress(runctx.Progress{Completed: []string{"get-task"}, Done: false}); err != nil {
+		t.Fatalf("SaveProgress: %v", err)
+	}
+
+	w := newWorker(t, loop, &FakePrompter{})
+	w.ResumeDir = resumeDir
+
+	var reports []Report
+	w.OnReport = func(r Report) { reports = append(reports, r) }
+
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	data, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatalf("read sink: %v", err)
+	}
+	if strings.Contains(string(data), "GOT_TASK") {
+		t.Errorf("get-task should have been skipped, but its marker was written: %q", data)
+	}
+	if !strings.Contains(string(data), "work saw TASK_ID=7") {
+		t.Errorf("work should have run with resumed TASK_ID=7; sink = %q", data)
+	}
+
+	var sawSkip bool
+	for _, r := range reports {
+		if r.Kind == ReportOutcome && r.Step == "get-task" && r.State == "resumed-skip" {
+			sawSkip = true
+		}
+	}
+	if !sawSkip {
+		t.Errorf("expected a resumed-skip outcome report for get-task; reports = %+v", reports)
+	}
+}
+
+func TestWorker_ResumeDir_DoneIterationRunsNoSteps(t *testing.T) {
+	sink := filepath.Join(t.TempDir(), "sink")
+	loop := resumeLoop(sink)
+
+	resumeDir := filepath.Join(t.TempDir(), "iter-done")
+	rc, err := runctx.New(resumeDir)
+	if err != nil {
+		t.Fatalf("runctx.New: %v", err)
+	}
+	rc.Set("TASK_ID", "7")
+	rc.Set("WORKDIR", t.TempDir())
+	if err := rc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := rc.SaveProgress(runctx.Progress{Completed: []string{"get-task", "work"}, Done: true}); err != nil {
+		t.Fatalf("SaveProgress: %v", err)
+	}
+
+	w := newWorker(t, loop, &FakePrompter{})
+	w.ResumeDir = resumeDir
+
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if _, err := os.Stat(sink); err == nil {
+		t.Errorf("no steps should have run for a Done iteration; sink was written")
+	}
+}
+
+func TestWorker_NoResumeDir_WritesProgress(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps: []config.Step{
+			{Name: "a", Type: config.StepScript, Run: "true"},
+			{Name: "b", Type: config.StepScript, Run: "true"},
+		},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	dir := filepath.Join(w.BaseDir, "runs", "l", "iter-1")
+	rc, err := runctx.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p, err := rc.LoadProgress()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	if !p.Done {
+		t.Errorf("expected iteration Progress.Done = true, got %+v", p)
+	}
+	if want := []string{"a", "b"}; !strings.Contains(strings.Join(p.Completed, ","), strings.Join(want, ",")) {
+		t.Errorf("Progress.Completed = %v, want %v", p.Completed, want)
+	}
+}
+
+func TestWorker_ResumeDir_ConsumedAfterFirstIteration(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 2,
+		Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	_ = loop.Validate()
+
+	resumeDir := filepath.Join(t.TempDir(), "iter-resumed")
+	rc, err := runctx.New(resumeDir)
+	if err != nil {
+		t.Fatalf("runctx.New: %v", err)
+	}
+	rc.Set("WORKDIR", t.TempDir())
+	if err := rc.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := rc.SaveProgress(runctx.Progress{Completed: []string{"s"}, Done: true}); err != nil {
+		t.Fatalf("SaveProgress: %v", err)
+	}
+
+	w := newWorker(t, loop, &FakePrompter{})
+	w.ResumeDir = resumeDir
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// The first iteration consumed idSeq's "iter-1" for its (unused) id while
+	// resuming resumeDir; the second (fresh) iteration gets its own normal
+	// run dir, "iter-2".
+	if _, err := os.Stat(filepath.Join(w.BaseDir, "runs", "l", "iter-2")); err != nil {
+		t.Errorf("expected a fresh iter-2 run dir for the second iteration: %v", err)
 	}
 }

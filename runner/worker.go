@@ -78,6 +78,16 @@ type Worker struct {
 	// Ctx, if non-nil, is checked before each step and between iterations;
 	// once cancelled, Run returns Ctx.Err() promptly.
 	Ctx context.Context
+
+	// ResumeDir, if set, names an existing iteration directory (with a
+	// context.json and, optionally, a progress.json) to resume instead of
+	// starting the first iteration fresh: the persisted context is loaded,
+	// steps already recorded as Completed in its Progress are skipped (each
+	// emitting a ReportOutcome with State "resumed-skip"), and execution
+	// continues from the first step not yet completed. Only the first
+	// iteration resumes; ResumeDir is consumed afterward and later
+	// iterations start fresh as usual.
+	ResumeDir string
 }
 
 // report calls w.OnReport if set, tagging r with the worker's id.
@@ -144,13 +154,15 @@ func (w *Worker) Run() error {
 
 func (w *Worker) run() error {
 	gen := w.idGen()
+	resumeDir := w.ResumeDir
 	for iter := 1; w.Loop.MaxIterations == 0 || iter <= w.Loop.MaxIterations; iter++ {
 		if err := w.ctxErr(); err != nil {
 			return err
 		}
 		id := gen()
 		w.report(Report{Kind: ReportIteration, Iteration: iter})
-		stop, err := w.runIteration(iter, id)
+		stop, err := w.runIteration(iter, id, resumeDir)
+		resumeDir = "" // only the first iteration may resume
 		if err != nil {
 			return err
 		}
@@ -161,23 +173,69 @@ func (w *Worker) run() error {
 	return nil
 }
 
+// stepCompleted reports whether name appears in completed.
+func stepCompleted(completed []string, name string) bool {
+	for _, c := range completed {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
 // runIteration runs all steps for one work unit. It returns stop=true when the
-// loop should end (no-work signalled).
-func (w *Worker) runIteration(iter int, id string) (stop bool, err error) {
-	dir := filepath.Join(w.BaseDir, "runs", w.Loop.Name, id)
-	if w.ID != "" {
-		dir = filepath.Join(w.BaseDir, "runs", w.Loop.Name, w.ID, id)
+// loop should end (no-work signalled). If resumeDir is non-empty, the
+// iteration resumes from that directory's persisted context and progress
+// instead of starting fresh: steps already marked Completed are skipped
+// (reporting "resumed-skip") and execution continues from the first
+// incomplete step, reusing the persisted context.
+func (w *Worker) runIteration(iter int, id string, resumeDir string) (stop bool, err error) {
+	resuming := resumeDir != ""
+
+	var dir string
+	var rc *runctx.RunContext
+	var progress runctx.Progress
+
+	if resuming {
+		dir = resumeDir
+		rc, err = runctx.Load(dir)
+		if err != nil {
+			return false, fmt.Errorf("resume %s: %w", dir, err)
+		}
+		progress, err = rc.LoadProgress()
+		if err != nil {
+			return false, fmt.Errorf("resume %s: %w", dir, err)
+		}
+		if v, ok := rc.Get("WORKDIR"); !ok || v == "" {
+			rc.Set("WORKDIR", w.Workdir)
+		}
+	} else {
+		dir = filepath.Join(w.BaseDir, "runs", w.Loop.Name, id)
+		if w.ID != "" {
+			dir = filepath.Join(w.BaseDir, "runs", w.Loop.Name, w.ID, id)
+		}
+		rc, err = runctx.New(dir)
+		if err != nil {
+			return false, err
+		}
+		rc.Set("WORKDIR", w.Workdir)
 	}
-	rc, err := runctx.New(dir)
-	if err != nil {
-		return false, err
-	}
-	rc.Set("WORKDIR", w.Workdir)
 
 	var digest strings.Builder
-	fmt.Fprintf(&digest, "# Iteration %s\n\n", id)
+	fmt.Fprintf(&digest, "# Iteration %s\n\n", filepath.Base(dir))
+
+	completed := append([]string(nil), progress.Completed...)
 
 	i := 0
+	if resuming {
+		for i < len(w.Loop.Steps) && stepCompleted(progress.Completed, w.Loop.Steps[i].Name) {
+			step := w.Loop.Steps[i]
+			w.reportTask(rc, Report{Kind: ReportOutcome, Step: step.Name, State: "resumed-skip", Iteration: iter})
+			fmt.Fprintf(&digest, "- %s → resumed-skip\n", step.Name)
+			i++
+		}
+	}
+
 	for i < len(w.Loop.Steps) {
 		if err := w.ctxErr(); err != nil {
 			return false, err
@@ -204,6 +262,10 @@ func (w *Worker) runIteration(iter int, id string) (stop bool, err error) {
 		switch outcome {
 		case OutcomeAdvance:
 			i++
+			completed = append(completed, step.Name)
+			if err := rc.SaveProgress(runctx.Progress{Completed: completed, Done: false}); err != nil {
+				return false, err
+			}
 		case OutcomeRetry:
 			// stay on the same step
 		case OutcomeAbort:
@@ -213,6 +275,9 @@ func (w *Worker) runIteration(iter int, id string) (stop bool, err error) {
 			_ = rc.WriteDigest(digest.String())
 			return true, nil
 		}
+	}
+	if err := rc.SaveProgress(runctx.Progress{Completed: completed, Done: true}); err != nil {
+		return false, err
 	}
 	return false, rc.WriteDigest(digest.String())
 }
