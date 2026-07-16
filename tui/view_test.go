@@ -287,3 +287,14 @@ func TestView_FleetFooterMentionsNewLoopKey(t *testing.T) {
 		t.Fatalf("fleet footer missing new-loop hint:\n%s", m.View())
 	}
 }
+
+func TestView_FleetShowsLoopsSection(t *testing.T) {
+	m := NewModel(Options{})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "jira-tracker", Enabled: true, Steps: []string{"s1"}}})
+	m = next.(Model)
+
+	out := m.View()
+	if !strings.Contains(out, "Loops") || !strings.Contains(out, "jira-tracker") || !strings.Contains(out, "[on]") {
+		t.Errorf("View() = %q, want a Loops section listing jira-tracker as [on]", out)
+	}
+}

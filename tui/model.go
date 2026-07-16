@@ -183,6 +183,19 @@ type Model struct {
 	focusRun, focusWorker string
 	builder               builder.Model
 	builderMsg            string
+
+	loops        []LoopSnapshot
+	expandedLoop string // "" = no loop expanded
+	treeCursor   int    // cursor position within treeRows()
+	loopsFocused bool   // false (zero value) = up/down/enter drive the Workers table, exactly as before this task; true = the Loops tree
+}
+
+// treeRow is one row of the Loops section's tree: either a loop header row
+// or (when that loop is expanded) one of its step rows.
+type treeRow struct {
+	Kind      string // "loop" | "step"
+	LoopName  string
+	StepIndex int // valid only when Kind == "step"
 }
 
 // NewModel returns a Model configured with opts.
@@ -211,6 +224,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RunsSnapshotMsg:
 		m.applyRunsSnapshot(msg)
 		return m, nil
+	case LoopsSnapshotMsg:
+		m.loops = []LoopSnapshot(msg)
+		if rows := m.treeRows(); m.treeCursor >= len(rows) {
+			m.treeCursor = len(rows) - 1
+		}
+		if m.treeCursor < 0 {
+			m.treeCursor = 0
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if m.view == viewBuilder {
 			return m.handleBuilderKey(msg)
@@ -230,8 +252,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey implements the TUI's keyboard navigation and decision/attach
 // actions:
 //
-//	up/k, down/j    move the cursor in the fleet view
-//	enter           focus the selected worker
+//	up/k, down/j    move the cursor: the Workers table by default, or the
+//	                Loops tree when tab has given it focus
+//	tab             toggle up/down/enter focus between the Workers table
+//	                and the Loops tree (fleet view only)
+//	space           expand/collapse the Loops tree's selected loop row
+//	enter           focus the selected worker (only when the Workers table
+//	                has focus, i.e. loopsFocused is false)
 //	esc             return to the fleet view
 //	q, ctrl+c       quit
 //	a/r/x           in focus with a pending decision, respond
@@ -242,23 +269,52 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
-		if m.view == viewFleet && m.cursor > 0 {
+		if m.view != viewFleet {
+			break
+		}
+		if m.loopsFocused {
+			if m.treeCursor > 0 {
+				m.treeCursor--
+			}
+		} else if m.cursor > 0 {
 			m.cursor--
 		}
 	case "down", "j":
+		if m.view != viewFleet {
+			break
+		}
+		if m.loopsFocused {
+			if last := len(m.treeRows()) - 1; m.treeCursor < last {
+				m.treeCursor++
+			}
+		} else if last := len(m.Workers()) - 1; m.cursor < last {
+			m.cursor++
+		}
+	case "tab":
 		if m.view == viewFleet {
-			if last := len(m.Workers()) - 1; m.cursor < last {
-				m.cursor++
+			m.loopsFocused = !m.loopsFocused
+		}
+	case " ":
+		if m.view == viewFleet {
+			rows := m.treeRows()
+			if m.treeCursor < len(rows) && rows[m.treeCursor].Kind == "loop" {
+				name := rows[m.treeCursor].LoopName
+				if m.expandedLoop == name {
+					m.expandedLoop = ""
+				} else {
+					m.expandedLoop = name
+				}
 			}
 		}
 	case "enter":
-		if m.view == viewFleet {
-			rows := m.Workers()
-			if m.cursor < len(rows) {
-				row := rows[m.cursor]
-				m.focusRun, m.focusWorker = row.RunID, row.WorkerID
-				m.view = viewFocus
-			}
+		if m.view != viewFleet || m.loopsFocused {
+			break
+		}
+		rows := m.Workers()
+		if m.cursor < len(rows) {
+			row := rows[m.cursor]
+			m.focusRun, m.focusWorker = row.RunID, row.WorkerID
+			m.view = viewFocus
 		}
 	case "esc":
 		m.view = viewFleet
@@ -407,9 +463,35 @@ func (m Model) viewFleet() string {
 		}
 		fmt.Fprintf(&b, "%s\n\n", msgStyle.Render(m.builderMsg))
 	}
+	if len(m.loops) > 0 {
+		b.WriteString(style.SubHeader.Render("Loops") + "\n")
+		treeRows := m.treeRows()
+		for i, r := range treeRows {
+			cursor := "  "
+			if m.loopsFocused && i == m.treeCursor {
+				cursor = style.Marker.Render("▸ ")
+			}
+			if r.Kind == "loop" {
+				loop, _ := m.loopByName(r.LoopName)
+				status := "[off]"
+				if loop.Enabled {
+					status = "[on]"
+				}
+				running := ""
+				if loop.RunID != "" {
+					running = fmt.Sprintf("  running (%s)", loop.RunID)
+				}
+				fmt.Fprintf(&b, "%s%-20s %s%s\n", cursor, loop.Name, status, running)
+			} else {
+				loop, _ := m.loopByName(r.LoopName)
+				fmt.Fprintf(&b, "%s    %d. %s\n", cursor, r.StepIndex+1, loop.Steps[r.StepIndex])
+			}
+		}
+		b.WriteString("\n")
+	}
 	for i, r := range rows {
 		cursor := "  "
-		if i == m.cursor {
+		if !m.loopsFocused && i == m.cursor {
 			cursor = style.Marker.Render("▸ ")
 		}
 		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
@@ -553,6 +635,33 @@ func (m Model) Workers() []workerRow {
 		return a.WorkerID < b.WorkerID
 	})
 	return rows
+}
+
+// treeRows returns the Loops section's current flattened row list: one
+// "loop" row per configured loop (sorted as delivered by ListLoops, i.e.
+// by name), plus — for whichever loop is expanded — a "step" row per step
+// in order, interleaved right after that loop's row.
+func (m Model) treeRows() []treeRow {
+	var rows []treeRow
+	for _, l := range m.loops {
+		rows = append(rows, treeRow{Kind: "loop", LoopName: l.Name})
+		if l.Name == m.expandedLoop {
+			for i := range l.Steps {
+				rows = append(rows, treeRow{Kind: "step", LoopName: l.Name, StepIndex: i})
+			}
+		}
+	}
+	return rows
+}
+
+// loopByName returns the LoopSnapshot named name, and whether one exists.
+func (m Model) loopByName(name string) (LoopSnapshot, bool) {
+	for _, l := range m.loops {
+		if l.Name == name {
+			return l, true
+		}
+	}
+	return LoopSnapshot{}, false
 }
 
 // NeedYouCount returns the number of workers with a pending decision
