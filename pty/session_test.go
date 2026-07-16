@@ -2,6 +2,8 @@ package pty
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -62,6 +64,57 @@ func TestSession_ScrollbackCap(t *testing.T) {
 
 	if got := len(s.Scrollback()); got > cap {
 		t.Errorf("len(Scrollback()) = %d, want <= %d", got, cap)
+	}
+}
+
+// TestSession_RunAttached_DetachWhileRunningKillsSession guards against a
+// regression where a one-shot local-attach caller (draft.Run,
+// runner.runPTY) blocks in Wait() forever after the human detaches while the
+// child is still alive: since these callers have no way to reattach later,
+// RunAttached must treat that detach as abandonment and kill the session
+// rather than leaving it (and the caller) waiting indefinitely.
+func TestSession_RunAttached_DetachWhileRunningKillsSession(t *testing.T) {
+	s, err := Start(Config{Argv: []string{"sh", "-c", "sleep 30"}})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Close()
+
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe (in): %v", err)
+	}
+	defer inR.Close()
+	defer inW.Close()
+
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe (out): %v", err)
+	}
+	defer outR.Close()
+	defer outW.Close()
+	go io.Copy(io.Discard, outR)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.RunAttached(inR, outW)
+	}()
+
+	// Give RunAttached/Attach a moment to reach their select before sending
+	// the detach escape, so it's actually observed as a mid-session detach
+	// rather than racing session startup.
+	time.Sleep(100 * time.Millisecond)
+	if _, err := inW.Write([]byte{0x02, 'd'}); err != nil {
+		t.Fatalf("write detach sequence: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Errorf("RunAttached returned nil error; want a non-nil error from killing the still-running sleep 30 child")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunAttached did not return after detach while the child was still running; it is left waiting on an abandoned session")
 	}
 }
 

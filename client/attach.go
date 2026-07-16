@@ -8,6 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/muesli/cancelreader"
+
 	looperpty "github.com/jbofill10/looper/pty"
 	"github.com/jbofill10/looper/rpc"
 	"golang.org/x/term"
@@ -50,7 +52,28 @@ func AttachStream(ctx context.Context, cl rpc.LooperClient, runID string, in, ou
 		}()
 	}
 
-	go forwardStdin(in, stream)
+	cr, err := cancelreader.NewReader(in)
+	if err != nil {
+		// Some fd types (e.g. /dev/null, or a redirected file) can't be
+		// registered with epoll/kqueue, and NewReader errors rather than
+		// returning a working reader. Fall back to reading in directly:
+		// forwardStdin can no longer be interrupted by Cancel on return (the
+		// same limitation this code had before cancelreader was
+		// introduced), but that must not stop the attach from working at
+		// all.
+		cr = uncancelableReader{in}
+	}
+	defer cr.Close()
+
+	stdinDone := make(chan struct{})
+	go func() {
+		defer close(stdinDone)
+		forwardStdin(cr, stream)
+	}()
+	defer func() {
+		cr.Cancel()
+		<-stdinDone
+	}()
 
 	for {
 		outMsg, err := stream.Recv()
@@ -66,6 +89,18 @@ func AttachStream(ctx context.Context, cl rpc.LooperClient, runID string, in, ou
 	}
 }
 
+// uncancelableReader adapts an *os.File to cancelreader.CancelReader for
+// AttachStream's fallback path: Cancel is a permanent no-op (there is no way
+// to interrupt an in-flight Read), and Close does not close the underlying
+// file, matching cancelreader's own Close semantics (which never closes the
+// wrapped file either).
+type uncancelableReader struct {
+	*os.File
+}
+
+func (uncancelableReader) Cancel() bool { return false }
+func (uncancelableReader) Close() error { return nil }
+
 // sendResize sends the terminal size of out as a Resize message,
 // best-effort (a failure to query the size just skips the resize).
 func sendResize(stream rpc.Looper_AttachClient, out *os.File) {
@@ -78,15 +113,17 @@ func sendResize(stream rpc.Looper_AttachClient, out *os.File) {
 	}})
 }
 
-// forwardStdin reads in, scanning for the Ctrl-b d detach escape, and sends
+// forwardStdin reads cr, scanning for the Ctrl-b d detach escape, and sends
 // passthrough bytes as session input. It closes the stream's send direction
 // (signalling detach or "no more input" to the daemon, which leaves the
-// session itself running) once the human detaches or in reaches EOF/error.
-func forwardStdin(in *os.File, stream rpc.Looper_AttachClient) {
+// session itself running) once the human detaches or cr reaches EOF/error —
+// including the error cr.Read reports once AttachStream cancels it to force
+// this goroutine to return.
+func forwardStdin(cr cancelreader.CancelReader, stream rpc.Looper_AttachClient) {
 	var scanner looperpty.DetachScanner
 	buf := make([]byte, 4096)
 	for {
-		n, err := in.Read(buf)
+		n, err := cr.Read(buf)
 		if n > 0 {
 			passthrough, detached := scanner.Scan(buf[:n])
 			if len(passthrough) > 0 {

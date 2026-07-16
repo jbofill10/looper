@@ -148,11 +148,5 @@ func runPTY(argv, env []string, socketPath string) error {
 		return fmt.Errorf("start interactive pty: %w", err)
 	}
 
-	go func() {
-		_ = sess.Attach(os.Stdin, os.Stdout)
-	}()
-
-	runErr := sess.Wait()
-	_ = sess.Close()
-	return runErr
+	return sess.RunAttached(os.Stdin, os.Stdout)
 }

@@ -64,12 +64,7 @@ func Run(projectDir string, h config.Harness, req Request) (string, error) {
 		return "", fmt.Errorf("start draft session: %w", err)
 	}
 
-	go func() {
-		_ = sess.Attach(os.Stdin, os.Stdout)
-	}()
-
-	runErr := sess.Wait()
-	_ = sess.Close()
+	runErr := sess.RunAttached(os.Stdin, os.Stdout)
 	if runErr != nil {
 		return "", fmt.Errorf("draft session: %w", runErr)
 	}
