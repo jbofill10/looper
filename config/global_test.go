@@ -20,6 +20,22 @@ func TestLoadGlobal_NonexistentPathReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestGlobal_HarnessNamesSorted(t *testing.T) {
+	g := &Global{Harnesses: map[string]Harness{
+		"gemini": {}, "claude": {}, "aider": {},
+	}}
+	got := g.HarnessNames()
+	want := []string{"aider", "claude", "gemini"}
+	if len(got) != len(want) {
+		t.Fatalf("HarnessNames() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("HarnessNames()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestDefaultGlobal_ResolveHarnessEmptyName(t *testing.T) {
 	g := DefaultGlobal()
 	h, err := g.ResolveHarness("")

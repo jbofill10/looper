@@ -9,8 +9,10 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jbofill10/looper/builder"
 	"github.com/jbofill10/looper/client"
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/draft"
 	"github.com/jbofill10/looper/rpc"
 )
 
@@ -29,12 +31,18 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
+	global, err := config.LoadGlobal(globalConfigPath())
+	if err != nil {
+		return fmt.Errorf("loading global config: %w", err)
+	}
 
 	var p *tea.Program
 	model := NewModel(Options{
-		RespondFn:  respondFn(ctx, cl),
-		AttachFn:   attachFn(ctx, cl, &p),
-		SaveLoopFn: saveLoopFn(wd),
+		RespondFn:    respondFn(ctx, cl),
+		AttachFn:     attachFn(ctx, cl, &p),
+		SaveLoopFn:   saveLoopFn(wd),
+		HarnessNames: global.HarnessNames(),
+		DraftFn:      draftFn(&p, global, wd),
 	})
 	p = tea.NewProgram(model)
 
@@ -43,6 +51,55 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 
 	_, err = p.Run()
 	return err
+}
+
+// globalConfigPath returns the path to looper's global config file:
+// $XDG_CONFIG_HOME/looper/config.yaml, or ~/.config/looper/config.yaml.
+// Duplicated from cli/run.go's globalPath (cli already imports tui, so
+// sharing the other way would cycle; the logic is too small to justify a
+// third package).
+func globalConfigPath() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "looper", "config.yaml")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".config", "looper", "config.yaml")
+	}
+	return filepath.Join(home, ".config", "looper", "config.yaml")
+}
+
+// draftFn returns the Options.DraftFn implementation: it releases the
+// Bubble Tea program's hold on the terminal (mirroring attachFn), runs a
+// draft session via the draft package using the global default harness,
+// and restores the program's terminal control on return. pp captures the
+// *tea.Program variable the same way attachFn does.
+func draftFn(pp **tea.Program, global *config.Global, wd string) func(builder.DraftRequest) tea.Cmd {
+	return func(req builder.DraftRequest) tea.Cmd {
+		return func() tea.Msg {
+			p := *pp
+			if p != nil {
+				if err := p.ReleaseTerminal(); err != nil {
+					return builder.DraftedMsg{Err: err}
+				}
+				defer p.RestoreTerminal()
+			}
+
+			h, err := global.ResolveHarness("")
+			if err != nil {
+				return builder.DraftedMsg{Err: err}
+			}
+			content, err := draft.Run(wd, h, draft.Request{
+				LoopName:   req.LoopName,
+				StepName:   req.StepName,
+				PriorSteps: req.PriorSteps,
+			})
+			if err != nil {
+				return builder.DraftedMsg{Err: err}
+			}
+			return builder.DraftedMsg{Content: content}
+		}
+	}
 }
 
 // saveLoopFn returns the Options.SaveLoopFn implementation used by the

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jbofill10/looper/builder"
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/draft"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -28,10 +29,20 @@ func buildAndSave(m builder.Model, dir string) (string, error) {
 	return path, nil
 }
 
-// runBuilder runs the guided builder program to completion (or until the
-// user quits without finishing) and returns the resulting Model.
-func runBuilder(m builder.Model) (builder.Model, error) {
-	p := tea.NewProgram(m)
+// runBuilder loads the global config, constructs the guided builder
+// (pre-populated from existing if non-nil, offering its configured
+// harnesses and a draft-session hook rooted at wd), and runs it to
+// completion (or until the user quits without finishing).
+func runBuilder(existing *config.Loop, wd string) (builder.Model, error) {
+	global, err := config.LoadGlobal(globalPath())
+	if err != nil {
+		return builder.Model{}, fmt.Errorf("loading global config: %w", err)
+	}
+
+	var p *tea.Program
+	m := builder.New(existing, global.HarnessNames(), builder.Options{DraftFn: draftFn(&p, global, wd)})
+	p = tea.NewProgram(m)
+
 	final, err := p.Run()
 	if err != nil {
 		return builder.Model{}, fmt.Errorf("running builder: %w", err)
@@ -41,6 +52,42 @@ func runBuilder(m builder.Model) (builder.Model, error) {
 		return builder.Model{}, fmt.Errorf("builder produced an unexpected model type")
 	}
 	return fm, nil
+}
+
+// draftFn returns the builder.Options.DraftFn implementation for the
+// standalone CLI builder: it releases the Bubble Tea program's hold on the
+// terminal, runs a draft session via the draft package using the global
+// default harness, and restores the program's terminal control on return.
+// pp captures the *tea.Program variable that runBuilder assigns after
+// constructing it (draftFn is built before the Program exists, so it
+// captures the variable, not its value) — mirroring tui/program.go's
+// attachFn/draftFn.
+func draftFn(pp **tea.Program, global *config.Global, wd string) func(builder.DraftRequest) tea.Cmd {
+	return func(req builder.DraftRequest) tea.Cmd {
+		return func() tea.Msg {
+			p := *pp
+			if p != nil {
+				if err := p.ReleaseTerminal(); err != nil {
+					return builder.DraftedMsg{Err: err}
+				}
+				defer p.RestoreTerminal()
+			}
+
+			h, err := global.ResolveHarness("")
+			if err != nil {
+				return builder.DraftedMsg{Err: err}
+			}
+			content, err := draft.Run(wd, h, draft.Request{
+				LoopName:   req.LoopName,
+				StepName:   req.StepName,
+				PriorSteps: req.PriorSteps,
+			})
+			if err != nil {
+				return builder.DraftedMsg{Err: err}
+			}
+			return builder.DraftedMsg{Content: content}
+		}
+	}
 }
 
 // notATerminal reports whether stdin or stdout is not a terminal, printing
@@ -73,7 +120,12 @@ func newNewCmd() *cobra.Command {
 				existing = &config.Loop{Name: args[0]}
 			}
 
-			fm, err := runBuilder(builder.New(existing))
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("getting working directory: %w", err)
+			}
+
+			fm, err := runBuilder(existing, wd)
 			if err != nil {
 				return err
 			}
@@ -82,10 +134,6 @@ func newNewCmd() *cobra.Command {
 				return nil
 			}
 
-			wd, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("getting working directory: %w", err)
-			}
 			path, err := buildAndSave(fm, wd)
 			if err != nil {
 				return fmt.Errorf("saving loop: %w", err)
@@ -120,7 +168,7 @@ func newEditCmd() *cobra.Command {
 				return nil
 			}
 
-			fm, err := runBuilder(builder.New(existing))
+			fm, err := runBuilder(existing, wd)
 			if err != nil {
 				return err
 			}

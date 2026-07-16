@@ -116,6 +116,13 @@ type Options struct {
 	// path written. Invoked when the embedded builder (viewBuilder) reaches
 	// its done stage.
 	SaveLoopFn func(loop *config.Loop) (string, error)
+	// HarnessNames lists the configured harnesses, offered as the guided
+	// builder's per-step harness select field.
+	HarnessNames []string
+	// DraftFn, if set, is passed through to each builder.Model the guided
+	// builder constructs, letting it launch an interactive harness session
+	// to draft a script step's contents (see builder.Options.DraftFn).
+	DraftFn func(builder.DraftRequest) tea.Cmd
 	// Quit, if set, makes Init immediately emit tea.Quit — used by tests
 	// and tools that want a Model that never blocks on a real program run.
 	Quit bool
@@ -179,6 +186,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleBuilderKey(msg)
 		}
 		return m.handleKey(msg)
+	case builder.DraftedMsg:
+		if m.view == viewBuilder {
+			next, cmd := m.builder.Update(msg)
+			m.builder = next.(builder.Model)
+			return m, cmd
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -220,7 +234,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = viewFleet
 	case "n":
 		if m.view == viewFleet {
-			m.builder = builder.New(nil)
+			m.builder = builder.New(nil, m.opts.HarnessNames, builder.Options{DraftFn: m.opts.DraftFn})
 			m.builderMsg = ""
 			m.view = viewBuilder
 		}

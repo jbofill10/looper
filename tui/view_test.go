@@ -23,6 +23,10 @@ func key(k string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "tab":
+		return tea.KeyMsg{Type: tea.KeyTab}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 	}
@@ -267,20 +271,26 @@ func TestView_CompletingBuilderSavesAndReturnsToFleet(t *testing.T) {
 
 	m, _ = press(t, m, "n") // enter builder
 
-	m = typeRunes(t, m, "dev-loop")
-	m, _ = press(t, m, "enter") // name
-
-	m, _ = press(t, m, "enter") // concurrency blank => 1
+	m = typeRunes(t, m, "dev-loop") // loop name
+	m, _ = press(t, m, "tab")       // -> concurrency (left blank)
+	m, _ = press(t, m, "tab")       // -> step name
 
 	m = typeRunes(t, m, "get-task")
-	m, _ = press(t, m, "enter") // step name
+	m, _ = press(t, m, "tab") // -> step type (defaults to script)
+	m, _ = press(t, m, "right")
+	m, _ = press(t, m, "right")
+	m, _ = press(t, m, "right") // script -> headless -> interactive -> manual
+	m, _ = press(t, m, "tab")   // -> outputs (left blank)
+	m, _ = press(t, m, "tab")   // -> add step
+	m, _ = press(t, m, "enter")
 
-	m = typeRunes(t, m, "manual")
-	m, _ = press(t, m, "enter") // step type
-
-	m, _ = press(t, m, "enter") // outputs blank
-
-	m, _ = press(t, m, "enter") // add another? blank => no => builder done
+	// After adding, focus resets to step name and step type defaults back
+	// to script, so its full field list is visible again en route to
+	// finish.
+	for i := 0; i < 7; i++ {
+		m, _ = press(t, m, "tab")
+	}
+	m, _ = press(t, m, "enter") // finish
 
 	if m.view != viewFleet {
 		t.Fatalf("view = %v, want viewFleet after builder completes", m.view)

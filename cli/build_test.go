@@ -14,9 +14,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// driveToDone feeds keys to m via Update until it reaches stageDone,
-// simulating a user completing the guided builder flow for a minimal
-// one-step manual loop named name.
+// driveToDone feeds keys to m via Update to complete the single-page
+// guided builder form with one manual step named "review", simulating a
+// user filling it out via tab navigation and the step-type select field
+// (right cycles script -> headless -> interactive -> manual).
 func driveToDone(t *testing.T, m builder.Model, name string) builder.Model {
 	t.Helper()
 	send := func(msg tea.Msg) {
@@ -32,28 +33,39 @@ func driveToDone(t *testing.T, m builder.Model, name string) builder.Model {
 			send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		}
 	}
+	tab := func() { send(tea.KeyMsg{Type: tea.KeyTab}) }
+	right := func() { send(tea.KeyMsg{Type: tea.KeyRight}) }
 	enter := func() { send(tea.KeyMsg{Type: tea.KeyEnter}) }
 
-	typeStr(name)
-	enter() // name
-	enter() // concurrency blank
+	typeStr(name) // loop name
+	tab()         // -> concurrency (left blank)
+	tab()         // -> step name
 	typeStr("review")
-	enter() // step name
-	typeStr("manual")
-	enter() // step type
-	enter() // outputs blank
-	typeStr("n")
-	enter() // add another -> done
+	tab() // -> step type (defaults to script)
+	right()
+	right()
+	right() // script -> headless -> interactive -> manual
+	tab()   // -> outputs (left blank)
+	tab()   // -> add step
+	enter()
+
+	// After adding, focus resets to step name and the step type defaults
+	// back to script, so its full field list (run/draft/on_fail) is
+	// visible again on the way to finish.
+	for i := 0; i < 7; i++ {
+		tab()
+	}
+	enter() // finish
 
 	if !m.Done() {
-		t.Fatalf("driveToDone: builder did not reach stageDone")
+		t.Fatalf("driveToDone: builder did not finish")
 	}
 	return m
 }
 
 func TestBuildAndSave(t *testing.T) {
 	dir := t.TempDir()
-	m := driveToDone(t, builder.New(nil), "my-loop")
+	m := driveToDone(t, builder.New(nil, nil, builder.Options{}), "my-loop")
 
 	path, err := buildAndSave(m, dir)
 	if err != nil {
@@ -78,7 +90,7 @@ func TestBuildAndSave(t *testing.T) {
 
 func TestBuildAndSave_NotDoneErrors(t *testing.T) {
 	dir := t.TempDir()
-	m := builder.New(nil) // still at stageLoopName
+	m := builder.New(nil, nil, builder.Options{}) // form not yet finished
 
 	if _, err := buildAndSave(m, dir); err == nil {
 		t.Fatal("buildAndSave: expected error for a builder that has not finished, got nil")

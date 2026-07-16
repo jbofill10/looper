@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 )
@@ -81,6 +82,16 @@ func LoadGlobal(path string) (*Global, error) {
 	}
 
 	return &g, nil
+}
+
+// HarnessNames returns the sorted names of g's configured harnesses.
+func (g *Global) HarnessNames() []string {
+	names := make([]string, 0, len(g.Harnesses))
+	for name := range g.Harnesses {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ResolveHarness looks up a harness by name; an empty name resolves to
