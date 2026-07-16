@@ -10,6 +10,9 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(newRunCmd())
 	root.AddCommand(newHookCmd())
+	root.AddCommand(newDaemonCmd())
+	root.AddCommand(newPingCmd())
+	root.AddCommand(newShutdownCmd())
 	return root
 }
 
