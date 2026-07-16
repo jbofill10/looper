@@ -7,7 +7,9 @@
 package tui
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -112,6 +114,14 @@ type Options struct {
 	Quit bool
 }
 
+// viewKind selects which of the TUI's two views is rendered.
+type viewKind int
+
+const (
+	viewFleet viewKind = iota
+	viewFocus
+)
+
 // Model is the Bubble Tea model for looper's fleet & focus TUI. It holds
 // aggregated run/worker state and renders both views; it never touches the
 // network directly (see Options.RespondFn / Options.AttachFn).
@@ -122,6 +132,10 @@ type Model struct {
 	// runOrder and workerOrder preserve first-seen insertion order, used as
 	// a stable tiebreaker alongside RunID/WorkerID sorting.
 	order []workerKey
+
+	view                  viewKind
+	cursor                int
+	focusRun, focusWorker string
 }
 
 // NewModel returns a Model configured with opts.
@@ -147,14 +161,163 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StateUpdateMsg:
 		m.applyStateUpdate(msg)
 		return m, nil
+	case RunsSnapshotMsg:
+		m.applyRunsSnapshot(msg)
+		return m, nil
+	case tea.KeyMsg:
+		return m.handleKey(msg)
 	}
 	return m, nil
 }
 
-// View implements tea.Model. Task 1 provides only state aggregation; fleet
-// and focus rendering are added in Task 2.
+// handleKey implements the TUI's keyboard navigation and decision/attach
+// actions:
+//
+//	up/k, down/j    move the cursor in the fleet view
+//	enter           focus the selected worker
+//	esc             return to the fleet view
+//	q, ctrl+c       quit
+//	a/r/x           in focus with a pending decision, respond
+//	                advance/retry/abort; with no pending decision, 'a'
+//	                attaches to the focused run's live session
+func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "up", "k":
+		if m.view == viewFleet && m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.view == viewFleet {
+			if last := len(m.Workers()) - 1; m.cursor < last {
+				m.cursor++
+			}
+		}
+	case "enter":
+		if m.view == viewFleet {
+			rows := m.Workers()
+			if m.cursor < len(rows) {
+				row := rows[m.cursor]
+				m.focusRun, m.focusWorker = row.RunID, row.WorkerID
+				m.view = viewFocus
+			}
+		}
+	case "esc":
+		m.view = viewFleet
+	case "a", "r", "x":
+		if m.view == viewFocus {
+			return m.handleFocusKey(msg.String())
+		}
+	}
+	return m, nil
+}
+
+// handleFocusKey implements the a/r/x keys while in the focus view: with a
+// pending decision they respond advance/retry/abort (optimistically
+// clearing the pending state and invoking RespondFn); with no pending
+// decision, 'a' attaches to the focused run (invoking AttachFn).
+func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
+	row, ok := m.focusedRow()
+	if !ok {
+		return m, nil
+	}
+
+	if row.PendingReqID != "" {
+		outcome, ok := map[string]string{"a": "advance", "r": "retry", "x": "abort"}[k]
+		if !ok {
+			return m, nil
+		}
+		runID, reqID := row.RunID, row.PendingReqID
+
+		key := workerKey{RunID: row.RunID, WorkerID: row.WorkerID}
+		row.PendingReqID = ""
+		row.PendingOptions = nil
+		m.workers[key] = row
+
+		if m.opts.RespondFn != nil {
+			return m, m.opts.RespondFn(runID, reqID, outcome)
+		}
+		return m, nil
+	}
+
+	if k == "a" && m.opts.AttachFn != nil {
+		return m, m.opts.AttachFn(row.RunID)
+	}
+	return m, nil
+}
+
+// focusedRow returns the worker row currently focused, and whether one is
+// focused at all.
+func (m Model) focusedRow() (workerRow, bool) {
+	row, ok := m.workers[workerKey{RunID: m.focusRun, WorkerID: m.focusWorker}]
+	return row, ok
+}
+
+// glyph returns the single-character status glyph for a worker row:
+// working ⚙, needs-human ⏸, done ✔, or no-work ∅.
+func glyph(row workerRow) string {
+	switch {
+	case row.PendingReqID != "":
+		return "⏸"
+	case row.Status == "done" || row.Status == "stopped" || row.Status == "error":
+		return "✔"
+	case row.Step == "" && row.State == "":
+		return "∅"
+	default:
+		return "⚙"
+	}
+}
+
+// View implements tea.Model, rendering the fleet or focus view.
 func (m Model) View() string {
-	return ""
+	if m.view == viewFocus {
+		return m.viewFocus()
+	}
+	return m.viewFleet()
+}
+
+// viewFleet renders the header badge and a table of worker rows, sorted
+// needs-human-first (see Workers), with a ▸ cursor on the selected row.
+func (m Model) viewFleet() string {
+	rows := m.Workers()
+	runs := map[string]struct{}{}
+	for _, r := range rows {
+		runs[r.RunID] = struct{}{}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "looper · %d runs · %d NEED YOU\n\n", len(runs), m.NeedYouCount())
+	for i, r := range rows {
+		cursor := "  "
+		if i == m.cursor {
+			cursor = "▸ "
+		}
+		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
+	}
+	b.WriteString("\n[up/down] move  [enter] focus  [q] quit\n")
+	return b.String()
+}
+
+// viewFocus renders the focused worker's title, current step, and (if
+// pending) a decision prompt.
+func (m Model) viewFocus() string {
+	row, ok := m.focusedRow()
+	if !ok {
+		return "no worker focused\n"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s · %s\n\n", row.WorkerID, row.Task)
+	fmt.Fprintf(&b, "step: %s (%s) %s\n", row.Step, row.State, glyph(row))
+
+	if row.PendingReqID != "" {
+		fmt.Fprintf(&b, "\ndecision needed: [a]dvance [r]etry [x]abort\n")
+	} else {
+		b.WriteString("\n[a] attach\n")
+	}
+	b.WriteString("\n[esc] back  [q] quit\n")
+	return b.String()
 }
 
 // applyStateUpdate upserts the worker row keyed by (RunID, WorkerID)
@@ -217,6 +380,29 @@ func (m *Model) applyStateUpdate(msg StateUpdateMsg) {
 	}
 
 	m.workers[key] = row
+}
+
+// applyRunsSnapshot upserts a worker row for every worker in snap, without
+// disturbing any pending decision already recorded for that worker (a
+// snapshot never carries decision-request information).
+func (m *Model) applyRunsSnapshot(snap RunsSnapshotMsg) {
+	for _, run := range snap {
+		for _, w := range run.Workers {
+			key := workerKey{RunID: run.RunID, WorkerID: w.WorkerID}
+			row, ok := m.workers[key]
+			if !ok {
+				row = workerRow{RunID: run.RunID, WorkerID: w.WorkerID}
+				m.order = append(m.order, key)
+			}
+			row.LoopName = run.LoopName
+			row.Task = w.Task
+			row.Step = w.CurrentStep
+			row.State = w.State
+			row.Status = w.Status
+			row.Iteration = w.Iteration
+			m.workers[key] = row
+		}
+	}
 }
 
 // Workers returns the current worker rows, sorted with needs-human workers
