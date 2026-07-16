@@ -88,3 +88,31 @@ func TestAppendEvent(t *testing.T) {
 		t.Errorf("event lines = %d, want 2", count)
 	}
 }
+
+func TestSaveLoadProgress_RoundTrip(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "i")
+	rc, _ := New(dir)
+	p := Progress{Completed: []string{"get-task", "work"}, Done: true}
+	if err := rc.SaveProgress(p); err != nil {
+		t.Fatalf("SaveProgress: %v", err)
+	}
+	loaded, err := rc.LoadProgress()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	if !reflect.DeepEqual(loaded, p) {
+		t.Errorf("LoadProgress() = %+v, want %+v", loaded, p)
+	}
+}
+
+func TestLoadProgress_Absent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "i")
+	rc, _ := New(dir)
+	loaded, err := rc.LoadProgress()
+	if err != nil {
+		t.Fatalf("LoadProgress: %v", err)
+	}
+	if !reflect.DeepEqual(loaded, Progress{}) {
+		t.Errorf("LoadProgress() on absent file = %+v, want zero value", loaded)
+	}
+}
