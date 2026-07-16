@@ -544,7 +544,11 @@ func (m Model) selectIdx(id fieldID) int {
 }
 
 func (m Model) renderAction(id fieldID, label string) string {
-	return fmt.Sprintf("%s%s\n", m.marker(id), style.Action.Render("[enter] "+label))
+	s := style.ActionInactive
+	if m.focus == id {
+		s = style.Action
+	}
+	return fmt.Sprintf("%s%s\n", m.marker(id), s.Render("[enter] "+label))
 }
 
 func (m Model) renderDraft() string {
