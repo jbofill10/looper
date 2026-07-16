@@ -38,11 +38,10 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 
 	var p *tea.Program
 	model := NewModel(Options{
-		RespondFn:     respondFn(ctx, cl),
-		AttachFn:      attachFn(ctx, cl, &p),
-		ProjectDir:    wd,
-		NewLoopPathFn: newLoopPathFn(wd),
-		AuthorFn:      authorFn(&p, global, wd),
+		RespondFn:  respondFn(ctx, cl),
+		AttachFn:   attachFn(ctx, cl, &p),
+		ProjectDir: wd,
+		AuthorFn:   authorFn(&p, global, wd),
 	})
 	p = tea.NewProgram(model)
 
@@ -97,22 +96,6 @@ func authorFn(pp **tea.Program, global *config.Global, wd string) func(builder.A
 				err = stepauthor.EditStep(req.ProjectDir, h, req.LoopPath, req.StepName, req.ValidationErr)
 			}
 			return builder.SessionDoneMsg{Err: err}
-		}
-	}
-}
-
-// newLoopPathFn returns an Options.NewLoopPathFn implementation that picks
-// an unused path under <wd>/.looper/loops/ each time it's called (new-1,
-// new-2, ... skipping any that already exist), for the fleet TUI's 'n'
-// (create loop) keybind.
-func newLoopPathFn(wd string) func() string {
-	return func() string {
-		dir := filepath.Join(wd, ".looper", "loops")
-		for i := 1; ; i++ {
-			path := filepath.Join(dir, fmt.Sprintf("new-%d.yaml", i))
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				return path
-			}
 		}
 	}
 }

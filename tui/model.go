@@ -8,6 +8,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -112,13 +114,10 @@ type Options struct {
 	// session. It returns a tea.Cmd that suspends the Bubble Tea program,
 	// bridges the session, and resumes it on return.
 	AttachFn func(runID string) tea.Cmd
-	// ProjectDir is the project directory passed to builder.New when
-	// entering the builder view (the 'n' key).
+	// ProjectDir is the project directory a new loop's file is written
+	// under (<ProjectDir>/.looper/loops/<name>.yaml) and passed to
+	// builder.New when entering the builder view (the 'n' key).
 	ProjectDir string
-	// NewLoopPathFn, if set, returns a fresh loop path (e.g.
-	// .looper/loops/new-<n>.yaml) each time the 'n' key constructs a new
-	// builder.Model.
-	NewLoopPathFn func() string
 	// AuthorFn, if set, is passed through to each builder.Model the
 	// embedded builder constructs, letting it launch an interactive
 	// claude session to create or edit a step (see
@@ -136,6 +135,7 @@ const (
 	viewFleet viewKind = iota
 	viewFocus
 	viewBuilder
+	viewNaming
 )
 
 // Model is the Bubble Tea model for looper's fleet & focus TUI. It holds
@@ -154,6 +154,11 @@ type Model struct {
 	focusRun, focusWorker string
 	builder               builder.Model
 	builderMsg            string
+
+	// naming and namingErr back the viewNaming stage: the loop name typed
+	// so far, and any validation error from the last enter attempt.
+	naming    string
+	namingErr string
 }
 
 // NewModel returns a Model configured with opts.
@@ -183,6 +188,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyRunsSnapshot(msg)
 		return m, nil
 	case tea.KeyMsg:
+		if m.view == viewNaming {
+			return m.handleNamingKey(msg)
+		}
 		if m.view == viewBuilder {
 			return m.handleBuilderKey(msg)
 		}
@@ -234,21 +242,62 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.view = viewFleet
 	case "n":
-		if m.view == viewFleet && m.opts.NewLoopPathFn != nil {
-			loopPath := m.opts.NewLoopPathFn()
-			b, err := builder.New(m.opts.ProjectDir, loopPath, builder.Options{AuthorFn: m.opts.AuthorFn})
-			if err != nil {
-				m.builderMsg = fmt.Sprintf("error: %v", err)
-				return m, nil
-			}
-			m.builder = b
-			m.builderMsg = ""
-			m.view = viewBuilder
+		if m.view == viewFleet {
+			m.naming = ""
+			m.namingErr = ""
+			m.view = viewNaming
 		}
 	case "a", "r", "x":
 		if m.view == viewFocus {
 			return m.handleFocusKey(msg.String())
 		}
+	}
+	return m, nil
+}
+
+// handleNamingKey implements the naming stage shown after pressing 'n':
+// printable runes append to the typed name, backspace removes the last
+// rune, esc cancels back to the fleet view, and enter validates the name
+// (non-empty, no existing loop file with that name) and, on success,
+// constructs the loop file's path and enters the builder view for it. A
+// validation failure sets namingErr and stays in the naming stage so the
+// user can try a different name.
+func (m Model) handleNamingKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.view = viewFleet
+		m.naming = ""
+		m.namingErr = ""
+		return m, nil
+	case "backspace":
+		if r := []rune(m.naming); len(r) > 0 {
+			m.naming = string(r[:len(r)-1])
+		}
+		return m, nil
+	case "enter":
+		name := strings.TrimSpace(m.naming)
+		if name == "" {
+			m.namingErr = "loop name is required"
+			return m, nil
+		}
+		loopPath := filepath.Join(m.opts.ProjectDir, ".looper", "loops", name+".yaml")
+		if _, err := os.Stat(loopPath); err == nil {
+			m.namingErr = fmt.Sprintf("a loop named %q already exists", name)
+			return m, nil
+		}
+		b, err := builder.New(m.opts.ProjectDir, loopPath, builder.Options{AuthorFn: m.opts.AuthorFn})
+		if err != nil {
+			m.namingErr = err.Error()
+			return m, nil
+		}
+		m.builder = b
+		m.builderMsg = ""
+		m.namingErr = ""
+		m.view = viewBuilder
+		return m, nil
+	}
+	if key.Type == tea.KeyRunes {
+		m.naming += string(key.Runes)
 	}
 	return m, nil
 }
@@ -349,6 +398,8 @@ func (m Model) View() string {
 		return m.viewFocus()
 	case viewBuilder:
 		return m.viewBuilder()
+	case viewNaming:
+		return m.viewNaming()
 	default:
 		return m.viewFleet()
 	}
@@ -418,6 +469,19 @@ func (m Model) viewBuilder() string {
 	var b strings.Builder
 	b.WriteString(m.builder.View())
 	b.WriteString("\n" + style.KeyHint.Render("[esc] cancel  [ctrl+c] quit") + "\n")
+	return b.String()
+}
+
+// viewNaming renders the name prompt shown after pressing 'n', before a
+// new loop's builder view opens.
+func (m Model) viewNaming() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render("New loop"))
+	fmt.Fprintf(&b, "%s %s\n", style.Label.Render("Name:"), m.naming)
+	if m.namingErr != "" {
+		fmt.Fprintf(&b, "\n%s\n", style.Error.Render("! "+m.namingErr))
+	}
+	b.WriteString("\n" + style.KeyHint.Render("[enter] create  [esc] cancel") + "\n")
 	return b.String()
 }
 
