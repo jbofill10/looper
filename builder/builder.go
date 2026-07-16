@@ -471,7 +471,7 @@ func onFailLabels() []string {
 // relevant to its selected type only), and any validation error.
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString("Loop builder\n\n")
+	b.WriteString(headerStyle.Render("Loop builder") + "\n\n")
 
 	b.WriteString(m.renderField(fName, "Loop name", m.name))
 	b.WriteString(m.renderField(fConcurrency, "Concurrency (blank = 1)", m.concurrency))
@@ -505,16 +505,16 @@ func (m Model) View() string {
 	b.WriteString(m.renderAction(fFinish, "Finish & save loop"))
 
 	if m.errMsg != "" {
-		fmt.Fprintf(&b, "\n! %s\n", m.errMsg)
+		fmt.Fprintf(&b, "\n%s\n", errorStyle.Render("! "+m.errMsg))
 	}
-	b.WriteString("\n[tab/shift+tab] move  [←/→] change option  [enter] confirm/select  [ctrl+d] draft script\n")
+	b.WriteString("\n" + hint("tab/shift+tab", "move") + "  " + hint("←/→", "change option") + "  " + hint("enter", "confirm/select") + "  " + hint("ctrl+d", "draft script") + "\n")
 	return b.String()
 }
 
 // marker returns the focus indicator for id.
 func (m Model) marker(id fieldID) string {
 	if m.focus == id {
-		return "▸ "
+		return markerStyle.Render("▸ ")
 	}
 	return "  "
 }

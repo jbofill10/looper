@@ -370,18 +370,26 @@ func (m Model) viewFleet() string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "looper · %d runs · %d NEED YOU\n\n", len(runs), m.NeedYouCount())
+	needYou := m.NeedYouCount()
+	badge := fmt.Sprintf("%d NEED YOU", needYou)
+	if needYou > 0 {
+		badge = badgeStyle.Render(badge)
+	} else {
+		badge = dimStyle.Render(badge)
+	}
+	fmt.Fprintf(&b, "%s · %d runs · %s\n\n", headerStyle.Render("looper"), len(runs), badge)
 	if m.builderMsg != "" {
 		fmt.Fprintf(&b, "%s\n\n", m.builderMsg)
 	}
 	for i, r := range rows {
 		cursor := "  "
 		if i == m.cursor {
-			cursor = "▸ "
+			cursor = cursorStyle.Render("▸ ")
 		}
-		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
+		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, styledGlyph(r))
 	}
-	b.WriteString("\n[up/down] move  [enter] focus  [n] new loop  [q] quit\n")
+	b.WriteString("\n")
+	b.WriteString(hint("up/down", "move") + "  " + hint("enter", "focus") + "  " + hint("n", "new loop") + "  " + hint("q", "quit") + "\n")
 	return b.String()
 }
 
@@ -394,15 +402,15 @@ func (m Model) viewFocus() string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s · %s\n\n", row.WorkerID, row.Task)
-	fmt.Fprintf(&b, "step: %s (%s) %s\n", row.Step, row.State, glyph(row))
+	fmt.Fprintf(&b, "%s · %s\n\n", headerStyle.Render(row.WorkerID), row.Task)
+	fmt.Fprintf(&b, "step: %s (%s) %s\n", row.Step, stateStyle.Render(row.State), styledGlyph(row))
 
 	if row.PendingReqID != "" {
-		fmt.Fprintf(&b, "\ndecision needed: [a]dvance [r]etry [x]abort\n")
+		fmt.Fprintf(&b, "\n%s %s %s %s\n", badgeStyle.Render("decision needed:"), hint("a", "dvance"), hint("r", "etry"), hint("x", "abort"))
 	} else {
-		b.WriteString("\n[a] attach\n")
+		b.WriteString("\n" + hint("a", "attach") + "\n")
 	}
-	b.WriteString("\n[esc] back  [q] quit\n")
+	b.WriteString("\n" + hint("esc", "back") + "  " + hint("q", "quit") + "\n")
 	return b.String()
 }
 
@@ -413,7 +421,7 @@ func (m Model) viewFocus() string {
 func (m Model) viewBuilder() string {
 	var b strings.Builder
 	b.WriteString(m.builder.View())
-	b.WriteString("\n[esc] cancel  [ctrl+c] quit\n")
+	b.WriteString("\n" + hint("esc", "cancel") + "  " + hint("ctrl+c", "quit") + "\n")
 	return b.String()
 }
 
