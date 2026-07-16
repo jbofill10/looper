@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,7 @@ func TestManager_ScriptLoopRunsToCompletion(t *testing.T) {
 	ch, unsub := m.Subscribe("")
 	defer unsub()
 
-	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir)
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
 	if err != nil {
 		t.Fatalf("StartLoop: %v", err)
 	}
@@ -120,7 +121,7 @@ func TestManager_ManualStepDecisionRequestAdvance(t *testing.T) {
 	ch, unsub := m.Subscribe("")
 	defer unsub()
 
-	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir)
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
 	if err != nil {
 		t.Fatalf("StartLoop: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestManager_RespondAbortEndsRun(t *testing.T) {
 	ch, unsub := m.Subscribe("")
 	defer unsub()
 
-	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir)
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
 	if err != nil {
 		t.Fatalf("StartLoop: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestManager_StopLoopMidRun(t *testing.T) {
 	ch, unsub := m.Subscribe("")
 	defer unsub()
 
-	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir)
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
 	if err != nil {
 		t.Fatalf("StartLoop: %v", err)
 	}
@@ -303,7 +304,7 @@ func TestManager_StartLoopRunsInteractiveSessionAndRegistersIt(t *testing.T) {
 	path := writeLoopFile(t, dir, loop)
 
 	m := NewManager(catHarnessGlobal(), "looper")
-	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir)
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
 	if err != nil {
 		t.Fatalf("StartLoop: %v", err)
 	}
@@ -346,4 +347,161 @@ func TestManager_StartLoopRunsInteractiveSessionAndRegistersIt(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("run did not finish after StopLoop")
+}
+
+// TestManager_ConcurrentWorkersPullDistinctTasks starts a run with
+// concurrency=3 against a shared-counter get-task script that hands out 5
+// distinct tasks then signals no-work. It asserts all 3 workers actually ran
+// (visible via distinct WorkerIDs in the update stream and in ListRuns),
+// that the 5 tasks were each pulled exactly once (no double-pulls despite
+// concurrent workers), and that the run's aggregate Status ends "done" only
+// once every worker has finished.
+func TestManager_ConcurrentWorkersPullDistinctTasks(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter")
+	sink := filepath.Join(dir, "sink")
+	const k = 5
+
+	script := fmt.Sprintf(`n=$(cat %q 2>/dev/null || echo 0)
+n=$((n+1))
+echo "$n" > %q
+if [ "$n" -gt %d ]; then exit 78; fi
+echo "$n" >> %q
+echo TASK_ID=$n >> "$LOOPER_OUTPUT"
+`, counter, counter, k, sink)
+
+	loop := &config.Loop{
+		Name:        "l",
+		Concurrency: 3,
+		Steps: []config.Step{
+			{Name: "get-task", Type: config.StepScript, SignalsNoWork: true, Run: script, Outputs: []string{"TASK_ID"}},
+			{Name: "work", Type: config.StepScript, Run: "true"},
+		},
+	}
+	path := writeLoopFile(t, dir, loop)
+
+	m := newTestManager(t)
+	ch, unsub := m.Subscribe("")
+	defer unsub()
+
+	_, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 3)
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	updates := drainUntilRunDone(t, ch)
+
+	workerIDs := map[string]bool{}
+	for _, u := range updates {
+		if u.WorkerID != "" {
+			workerIDs[u.WorkerID] = true
+		}
+	}
+	if len(workerIDs) != 3 {
+		t.Errorf("saw %d distinct worker ids in updates, want 3: %v", len(workerIDs), workerIDs)
+	}
+
+	last := updates[len(updates)-1]
+	if last.State != "done" {
+		t.Errorf("run_done State = %q, want done", last.State)
+	}
+
+	data, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatalf("read sink: %v", err)
+	}
+	lines := strings.Fields(strings.TrimSpace(string(data)))
+	seen := map[string]bool{}
+	for _, l := range lines {
+		if seen[l] {
+			t.Fatalf("task %q pulled more than once; sink contents: %q", l, data)
+		}
+		seen[l] = true
+	}
+	if len(seen) != k {
+		t.Fatalf("got %d distinct tasks, want %d; sink contents: %q", len(seen), k, data)
+	}
+
+	runs := m.ListRuns()
+	if len(runs) != 1 {
+		t.Fatalf("ListRuns = %v, want 1 run", runs)
+	}
+	if runs[0].Status != "done" {
+		t.Errorf("Status = %q, want done", runs[0].Status)
+	}
+	if len(runs[0].Workers) != 3 {
+		t.Fatalf("Workers = %v, want 3 entries", runs[0].Workers)
+	}
+	ids := map[string]bool{}
+	for _, w := range runs[0].Workers {
+		ids[w.WorkerID] = true
+	}
+	for _, want := range []string{"w1", "w2", "w3"} {
+		if !ids[want] {
+			t.Errorf("missing worker %q in %v", want, runs[0].Workers)
+		}
+	}
+}
+
+// TestManager_ConcurrentManualStepsDistinctRequestIDs starts a run with
+// concurrency=2 against a manual-step loop: each of the two workers should
+// publish its own decision_request, carrying distinct request ids and
+// distinct worker ids. Responding to each by request id must let the run
+// complete.
+func TestManager_ConcurrentManualStepsDistinctRequestIDs(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:          "l",
+		Concurrency:   2,
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "gate", Type: config.StepManual}},
+	}
+	path := writeLoopFile(t, dir, loop)
+
+	m := newTestManager(t)
+	ch, unsub := m.Subscribe("")
+	defer unsub()
+
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 2)
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	reqToWorker := map[string]string{}
+	for len(reqToWorker) < 2 {
+		u := recvUpdate(t, ch)
+		if u.Kind == "decision_request" {
+			reqToWorker[u.RequestID] = u.WorkerID
+		}
+	}
+	workerSet := map[string]bool{}
+	for reqID, wid := range reqToWorker {
+		if wid == "" {
+			t.Fatalf("decision_request %q missing WorkerID", reqID)
+		}
+		workerSet[wid] = true
+	}
+	if len(workerSet) != 2 {
+		t.Fatalf("decision requests carried %d distinct worker ids, want 2: %v", len(workerSet), reqToWorker)
+	}
+
+	for reqID := range reqToWorker {
+		if err := m.Respond(runID, reqID, "advance"); err != nil {
+			t.Fatalf("Respond(%s): %v", reqID, err)
+		}
+	}
+
+	updates := drainUntilRunDone(t, ch)
+	last := updates[len(updates)-1]
+	if last.State != "done" {
+		t.Errorf("run_done State = %q, want done", last.State)
+	}
+
+	runs := m.ListRuns()
+	if len(runs) != 1 || runs[0].Status != "done" {
+		t.Errorf("ListRuns = %v, want single done run", runs)
+	}
+	if len(runs[0].Workers) != 2 {
+		t.Errorf("Workers = %v, want 2 entries", runs[0].Workers)
+	}
 }

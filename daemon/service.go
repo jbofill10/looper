@@ -11,7 +11,7 @@ import (
 
 // StartLoop starts running a loop and returns its run id.
 func (s *Server) StartLoop(ctx context.Context, req *rpc.StartLoopRequest) (*rpc.StartLoopResponse, error) {
-	runID, err := s.manager.StartLoop(req.GetLoopName(), req.GetLoopFile(), req.GetBaseDir(), req.GetWorkdir())
+	runID, err := s.manager.StartLoop(req.GetLoopName(), req.GetLoopFile(), req.GetBaseDir(), req.GetWorkdir(), int(req.GetConcurrency()))
 	if err != nil {
 		return nil, err
 	}
