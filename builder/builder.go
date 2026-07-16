@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/style"
 )
 
 // fieldID identifies one field or action on the single-page form.
@@ -471,19 +472,19 @@ func onFailLabels() []string {
 // relevant to its selected type only), and any validation error.
 func (m Model) View() string {
 	var b strings.Builder
-	b.WriteString("Loop builder\n\n")
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render("Loop builder"))
 
 	b.WriteString(m.renderField(fName, "Loop name", m.name))
 	b.WriteString(m.renderField(fConcurrency, "Concurrency (blank = 1)", m.concurrency))
 
 	if len(m.steps) > 0 {
-		b.WriteString("\nSteps so far:\n")
+		fmt.Fprintf(&b, "\n%s\n", style.SubHeader.Render("Steps so far:"))
 		for i, s := range m.steps {
 			fmt.Fprintf(&b, "  %d. %s (%s) %s\n", i+1, s.Name, s.Type, stepSummary(s))
 		}
 	}
 
-	b.WriteString("\nNew step:\n")
+	fmt.Fprintf(&b, "\n%s\n", style.SubHeader.Render("New step:"))
 	b.WriteString(m.renderField(fStepName, "Step name", m.curName))
 	b.WriteString(m.renderSelect(fStepType, "Step type"))
 
@@ -505,28 +506,28 @@ func (m Model) View() string {
 	b.WriteString(m.renderAction(fFinish, "Finish & save loop"))
 
 	if m.errMsg != "" {
-		fmt.Fprintf(&b, "\n! %s\n", m.errMsg)
+		fmt.Fprintf(&b, "\n%s\n", style.Error.Render("! "+m.errMsg))
 	}
-	b.WriteString("\n[tab/shift+tab] move  [←/→] change option  [enter] confirm/select  [ctrl+d] draft script\n")
+	b.WriteString("\n" + style.KeyHint.Render("[tab/shift+tab] move  [←/→] change option  [enter] confirm/select  [ctrl+d] draft script") + "\n")
 	return b.String()
 }
 
 // marker returns the focus indicator for id.
 func (m Model) marker(id fieldID) string {
 	if m.focus == id {
-		return "▸ "
+		return style.Marker.Render("▸ ")
 	}
 	return "  "
 }
 
 func (m Model) renderField(id fieldID, label, value string) string {
-	return fmt.Sprintf("%s%s: %s\n", m.marker(id), label, value)
+	return fmt.Sprintf("%s%s %s\n", m.marker(id), style.Label.Render(label+":"), value)
 }
 
 func (m Model) renderSelect(id fieldID, label string) string {
 	idx := m.selectIdx(id)
 	opts := m.selectOptions(id)
-	return fmt.Sprintf("%s%s: ‹ %s ›\n", m.marker(id), label, opts[idx])
+	return fmt.Sprintf("%s%s %s\n", m.marker(id), style.Label.Render(label+":"), style.Select.Render("‹ "+opts[idx]+" ›"))
 }
 
 // selectIdx returns the focused select field's current option index.
@@ -543,15 +544,15 @@ func (m Model) selectIdx(id fieldID) int {
 }
 
 func (m Model) renderAction(id fieldID, label string) string {
-	return fmt.Sprintf("%s[enter] %s\n", m.marker(id), label)
+	return fmt.Sprintf("%s%s\n", m.marker(id), style.Action.Render("[enter] "+label))
 }
 
 func (m Model) renderDraft() string {
-	label := "[ctrl+d] Draft script with harness (opens interactive session)"
 	if m.drafting {
-		label = "drafting… (session running)"
+		return fmt.Sprintf("%s%s\n", m.marker(fDraft), style.Busy.Render("drafting… (session running)"))
 	}
-	return fmt.Sprintf("%s%s\n", m.marker(fDraft), label)
+	label := "[ctrl+d] Draft script with harness (opens interactive session)"
+	return fmt.Sprintf("%s%s\n", m.marker(fDraft), style.Action.Render(label))
 }
 
 // stepSummary renders a short, type-appropriate summary of an already

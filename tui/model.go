@@ -15,6 +15,7 @@ import (
 
 	"github.com/jbofill10/looper/builder"
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/style"
 )
 
 // StateUpdateMsg mirrors daemon.Update: it is the tea.Msg carrying one
@@ -338,13 +339,13 @@ func (m Model) focusedRow() (workerRow, bool) {
 func glyph(row workerRow) string {
 	switch {
 	case row.PendingReqID != "":
-		return "⏸"
+		return style.GlyphNeedsYou.Render("⏸")
 	case row.Status == "done" || row.Status == "stopped" || row.Status == "error":
-		return "✔"
+		return style.GlyphDone.Render("✔")
 	case row.Step == "" && row.State == "":
-		return "∅"
+		return style.GlyphEmpty.Render("∅")
 	default:
-		return "⚙"
+		return style.GlyphRunning.Render("⚙")
 	}
 }
 
@@ -370,18 +371,28 @@ func (m Model) viewFleet() string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "looper · %d runs · %d NEED YOU\n\n", len(runs), m.NeedYouCount())
+	header := fmt.Sprintf("looper · %d runs · %d NEED YOU", len(runs), m.NeedYouCount())
+	if m.NeedYouCount() > 0 {
+		header = style.TitleAlert.Render(header)
+	} else {
+		header = style.Title.Render(header)
+	}
+	fmt.Fprintf(&b, "%s\n\n", header)
 	if m.builderMsg != "" {
-		fmt.Fprintf(&b, "%s\n\n", m.builderMsg)
+		msgStyle := style.Success
+		if strings.HasPrefix(m.builderMsg, "error:") {
+			msgStyle = style.Error
+		}
+		fmt.Fprintf(&b, "%s\n\n", msgStyle.Render(m.builderMsg))
 	}
 	for i, r := range rows {
 		cursor := "  "
 		if i == m.cursor {
-			cursor = "▸ "
+			cursor = style.Marker.Render("▸ ")
 		}
 		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
 	}
-	b.WriteString("\n[up/down] move  [enter] focus  [n] new loop  [q] quit\n")
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] focus  [n] new loop  [q] quit") + "\n")
 	return b.String()
 }
 
@@ -394,15 +405,15 @@ func (m Model) viewFocus() string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s · %s\n\n", row.WorkerID, row.Task)
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · %s", row.WorkerID, row.Task)))
 	fmt.Fprintf(&b, "step: %s (%s) %s\n", row.Step, row.State, glyph(row))
 
 	if row.PendingReqID != "" {
-		fmt.Fprintf(&b, "\ndecision needed: [a]dvance [r]etry [x]abort\n")
+		fmt.Fprintf(&b, "\n%s\n", style.TitleAlert.Render("decision needed: [a]dvance [r]etry [x]abort"))
 	} else {
-		b.WriteString("\n[a] attach\n")
+		b.WriteString("\n" + style.Action.Render("[a] attach") + "\n")
 	}
-	b.WriteString("\n[esc] back  [q] quit\n")
+	b.WriteString("\n" + style.KeyHint.Render("[esc] back  [q] quit") + "\n")
 	return b.String()
 }
 
@@ -413,7 +424,7 @@ func (m Model) viewFocus() string {
 func (m Model) viewBuilder() string {
 	var b strings.Builder
 	b.WriteString(m.builder.View())
-	b.WriteString("\n[esc] cancel  [ctrl+c] quit\n")
+	b.WriteString("\n" + style.KeyHint.Render("[esc] cancel  [ctrl+c] quit") + "\n")
 	return b.String()
 }
 
