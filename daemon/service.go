@@ -94,6 +94,62 @@ func (s *Server) RespondDecision(ctx context.Context, req *rpc.RespondDecisionRe
 	return &rpc.RespondDecisionResponse{}, nil
 }
 
+// ListLoops lists every loop configured under req.BaseDir.
+func (s *Server) ListLoops(ctx context.Context, req *rpc.ListLoopsRequest) (*rpc.ListLoopsResponse, error) {
+	summaries, err := s.manager.ListLoops(req.GetBaseDir())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*rpc.LoopInfo, len(summaries))
+	for i, l := range summaries {
+		out[i] = &rpc.LoopInfo{Name: l.Name, Path: l.Path, Enabled: l.Enabled, Steps: l.Steps, RunId: l.RunID}
+	}
+	return &rpc.ListLoopsResponse{Loops: out}, nil
+}
+
+// SetLoopEnabled persists a loop's enabled flag and starts/gracefully
+// stops its run accordingly.
+func (s *Server) SetLoopEnabled(ctx context.Context, req *rpc.SetLoopEnabledRequest) (*rpc.SetLoopEnabledResponse, error) {
+	runID, err := s.manager.SetLoopEnabled(req.GetLoopName(), req.GetBaseDir(), req.GetWorkdir(), req.GetEnabled())
+	if err != nil {
+		return nil, err
+	}
+	return &rpc.SetLoopEnabledResponse{RunId: runID}, nil
+}
+
+// RunLoopOnce starts a loop as a one-off run.
+func (s *Server) RunLoopOnce(ctx context.Context, req *rpc.RunLoopOnceRequest) (*rpc.RunLoopOnceResponse, error) {
+	runID, err := s.manager.RunLoopOnce(req.GetLoopName(), req.GetLoopFile(), req.GetBaseDir(), req.GetWorkdir())
+	if err != nil {
+		return nil, err
+	}
+	return &rpc.RunLoopOnceResponse{RunId: runID}, nil
+}
+
+// StopLoopGraceful lets a run's in-flight iteration finish, then stops it.
+func (s *Server) StopLoopGraceful(ctx context.Context, req *rpc.StopLoopGracefulRequest) (*rpc.StopLoopGracefulResponse, error) {
+	if err := s.manager.StopLoopGraceful(req.GetRunId()); err != nil {
+		return nil, err
+	}
+	return &rpc.StopLoopGracefulResponse{}, nil
+}
+
+// RenameLoop renames a loop's file and registry entry.
+func (s *Server) RenameLoop(ctx context.Context, req *rpc.RenameLoopRequest) (*rpc.RenameLoopResponse, error) {
+	if err := s.manager.RenameLoop(req.GetLoopName(), req.GetNewName(), req.GetBaseDir()); err != nil {
+		return nil, err
+	}
+	return &rpc.RenameLoopResponse{}, nil
+}
+
+// DeleteLoop deletes a loop's file and registry entry.
+func (s *Server) DeleteLoop(ctx context.Context, req *rpc.DeleteLoopRequest) (*rpc.DeleteLoopResponse, error) {
+	if err := s.manager.DeleteLoop(req.GetLoopName(), req.GetBaseDir()); err != nil {
+		return nil, err
+	}
+	return &rpc.DeleteLoopResponse{}, nil
+}
+
 // Attach bridges a client's bidi stream to a run's live interactive pty
 // session: the session's output is tapped onto the stream (via streamWriter
 // + Session.PipeTo), and client messages are forwarded to the session as

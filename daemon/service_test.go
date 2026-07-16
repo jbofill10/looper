@@ -378,3 +378,118 @@ func TestService_ConcurrencyPropagatesToWorkerFields(t *testing.T) {
 		}
 	}
 }
+
+func TestService_ListLoopsAndSetLoopEnabled(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+
+	listResp, err := c.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: filepath.Join(dir, ".looper")})
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+	if len(listResp.Loops) != 1 || listResp.Loops[0].Enabled {
+		t.Fatalf("loops = %v, want one disabled loop", listResp.Loops)
+	}
+
+	setResp, err := c.SetLoopEnabled(ctx, &rpc.SetLoopEnabledRequest{
+		LoopName: "a", BaseDir: filepath.Join(dir, ".looper"), Workdir: dir, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SetLoopEnabled: %v", err)
+	}
+	if setResp.RunId == "" {
+		t.Fatalf("SetLoopEnabled did not return a run id")
+	}
+
+	listResp, err = c.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: filepath.Join(dir, ".looper")})
+	if err != nil {
+		t.Fatalf("ListLoops after enable: %v", err)
+	}
+	if !listResp.Loops[0].Enabled || listResp.Loops[0].RunId != setResp.RunId {
+		t.Errorf("loops after enable = %v, want enabled with run id %q", listResp.Loops, setResp.RunId)
+	}
+}
+
+func TestService_RunLoopOnce(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+	resp, err := c.RunLoopOnce(ctx, &rpc.RunLoopOnceRequest{LoopName: "a", BaseDir: filepath.Join(dir, ".looper"), Workdir: dir})
+	if err != nil {
+		t.Fatalf("RunLoopOnce: %v", err)
+	}
+	if resp.RunId == "" {
+		t.Errorf("RunLoopOnce did not return a run id")
+	}
+}
+
+func TestService_StopLoopGraceful(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+	startResp, err := c.SetLoopEnabled(ctx, &rpc.SetLoopEnabledRequest{
+		LoopName: "a", BaseDir: filepath.Join(dir, ".looper"), Workdir: dir, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SetLoopEnabled: %v", err)
+	}
+	if _, err := c.StopLoopGraceful(ctx, &rpc.StopLoopGracefulRequest{RunId: startResp.RunId}); err != nil {
+		t.Fatalf("StopLoopGraceful: %v", err)
+	}
+}
+
+func TestService_RenameAndDeleteLoop(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+	if _, err := c.RenameLoop(ctx, &rpc.RenameLoopRequest{LoopName: "a", NewName: "b", BaseDir: filepath.Join(dir, ".looper")}); err != nil {
+		t.Fatalf("RenameLoop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(loopsDir, "b.yaml")); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+
+	if _, err := c.DeleteLoop(ctx, &rpc.DeleteLoopRequest{LoopName: "b", BaseDir: filepath.Join(dir, ".looper")}); err != nil {
+		t.Fatalf("DeleteLoop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(loopsDir, "b.yaml")); !os.IsNotExist(err) {
+		t.Errorf("deleted file still exists")
+	}
+}
