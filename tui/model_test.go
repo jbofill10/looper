@@ -117,6 +117,9 @@ func TestModel_ExpandingLoopShowsItsSteps(t *testing.T) {
 	})
 	m = next.(Model)
 
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = next.(Model)
 

@@ -295,7 +295,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loopsFocused = !m.loopsFocused
 		}
 	case " ":
-		if m.view == viewFleet {
+		if m.view == viewFleet && m.loopsFocused {
 			rows := m.treeRows()
 			if m.treeCursor < len(rows) && rows[m.treeCursor].Kind == "loop" {
 				name := rows[m.treeCursor].LoopName
