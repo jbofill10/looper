@@ -189,11 +189,14 @@ git commit -m "feat(config): add Step.Validate for per-step validation"
 - Create: `harness/plugin/.claude-plugin/plugin.json`
 - Create: `harness/plugin/skills/step-authoring/SKILL.md`
 - Create: `harness/plugin.go`
-- Delete: `harness/skill.go`
-- Delete: `harness/skills/loop-creation/SKILL.md` (and the now-empty
-  `harness/skills/` directory)
-- Delete: `harness/skill_test.go`
 - Test: `harness/plugin_test.go`
+
+Note: `harness/skill.go`/`harness/skill_test.go`/`harness/skills/` are
+NOT deleted in this task — `draft/draft.go` still calls
+`harness.EnsureLoopCreationSkill` until Task 4 deletes the whole `draft`
+package (its only caller). Deleting them here breaks the build. Task 4
+deletes all four (`draft/`, `harness/skill.go`, `harness/skill_test.go`,
+`harness/skills/`) together.
 
 **Interfaces:**
 - Produces: `const harness.StepAuthoringPluginName = "step-authoring"`,
@@ -549,6 +552,12 @@ git commit -m "feat(harness): add BuildStepAuthoring argv builder"
 - Create: `stepauthor/stepauthor_test.go`
 - Delete: `draft/draft.go`, `draft/draft_test.go` (and the now-empty
   `draft/` directory)
+- Delete: `harness/skill.go`, `harness/skill_test.go`,
+  `harness/skills/loop-creation/SKILL.md` (and the now-empty
+  `harness/skills/` directory) — `draft/draft.go` was their only caller
+  (via `harness.EnsureLoopCreationSkill`); Task 2 left them in place for
+  exactly this reason (see Task 2's note), so this task retires them
+  together with `draft/`.
 
 **Interfaces:**
 - Consumes: `harness.EnsureStepAuthoringPlugin() (string, error)` (Task 2),
