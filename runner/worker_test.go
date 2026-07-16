@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,6 +171,59 @@ func TestWorker_ExecutorForInteractive(t *testing.T) {
 	}
 	if ie.Harness.Interactive == nil {
 		t.Errorf("Harness not resolved: %+v", ie.Harness)
+	}
+}
+
+func TestWorker_OnReportRecordsSequence(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+
+	var kinds []string
+	w.OnReport = func(r Report) {
+		kinds = append(kinds, r.Kind)
+	}
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []string{ReportIteration, ReportStepStart, ReportOutcome, ReportRunDone}
+	if len(kinds) != len(want) {
+		t.Fatalf("report kinds = %v, want %v", kinds, want)
+	}
+	for i, k := range want {
+		if kinds[i] != k {
+			t.Errorf("kinds[%d] = %q, want %q", i, kinds[i], k)
+		}
+	}
+}
+
+func TestWorker_CtxCancelledStopsBeforeFurtherSteps(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 0,
+		Steps: []config.Step{
+			{Name: "s1", Type: config.StepScript, Run: "true"},
+			{Name: "s2", Type: config.StepScript, Run: `echo ran >> "$LOOPER_OUTPUT"`},
+		},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before Run starts
+	w.Ctx = ctx
+
+	err := w.Run()
+	if err == nil {
+		t.Fatalf("expected error from cancelled context, got nil")
+	}
+	if _, err := os.Stat(filepath.Join(w.BaseDir, "runs", "l", "iter-1")); err == nil {
+		t.Errorf("expected no run dir to be created after immediate cancellation")
 	}
 }
 

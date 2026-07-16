@@ -19,8 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Looper_Ping_FullMethodName     = "/looper.v1.Looper/Ping"
-	Looper_Shutdown_FullMethodName = "/looper.v1.Looper/Shutdown"
+	Looper_Ping_FullMethodName            = "/looper.v1.Looper/Ping"
+	Looper_Shutdown_FullMethodName        = "/looper.v1.Looper/Shutdown"
+	Looper_StartLoop_FullMethodName       = "/looper.v1.Looper/StartLoop"
+	Looper_StopLoop_FullMethodName        = "/looper.v1.Looper/StopLoop"
+	Looper_ListRuns_FullMethodName        = "/looper.v1.Looper/ListRuns"
+	Looper_StreamState_FullMethodName     = "/looper.v1.Looper/StreamState"
+	Looper_RespondDecision_FullMethodName = "/looper.v1.Looper/RespondDecision"
 )
 
 // LooperClient is the client API for Looper service.
@@ -33,6 +38,16 @@ type LooperClient interface {
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
 	// Shutdown asks the daemon to stop gracefully.
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
+	// StartLoop starts running a loop in the daemon and returns its run id.
+	StartLoop(ctx context.Context, in *StartLoopRequest, opts ...grpc.CallOption) (*StartLoopResponse, error)
+	// StopLoop stops a running loop.
+	StopLoop(ctx context.Context, in *StopLoopRequest, opts ...grpc.CallOption) (*StopLoopResponse, error)
+	// ListRuns returns the current runs known to the daemon.
+	ListRuns(ctx context.Context, in *ListRunsRequest, opts ...grpc.CallOption) (*ListRunsResponse, error)
+	// StreamState streams state updates for a run (or all runs if run_id empty).
+	StreamState(ctx context.Context, in *StreamStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StateUpdate], error)
+	// RespondDecision answers a pending decision request (manual step, failure).
+	RespondDecision(ctx context.Context, in *RespondDecisionRequest, opts ...grpc.CallOption) (*RespondDecisionResponse, error)
 }
 
 type looperClient struct {
@@ -63,6 +78,65 @@ func (c *looperClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts .
 	return out, nil
 }
 
+func (c *looperClient) StartLoop(ctx context.Context, in *StartLoopRequest, opts ...grpc.CallOption) (*StartLoopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StartLoopResponse)
+	err := c.cc.Invoke(ctx, Looper_StartLoop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *looperClient) StopLoop(ctx context.Context, in *StopLoopRequest, opts ...grpc.CallOption) (*StopLoopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StopLoopResponse)
+	err := c.cc.Invoke(ctx, Looper_StopLoop_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *looperClient) ListRuns(ctx context.Context, in *ListRunsRequest, opts ...grpc.CallOption) (*ListRunsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRunsResponse)
+	err := c.cc.Invoke(ctx, Looper_ListRuns_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *looperClient) StreamState(ctx context.Context, in *StreamStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StateUpdate], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Looper_ServiceDesc.Streams[0], Looper_StreamState_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamStateRequest, StateUpdate]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Looper_StreamStateClient = grpc.ServerStreamingClient[StateUpdate]
+
+func (c *looperClient) RespondDecision(ctx context.Context, in *RespondDecisionRequest, opts ...grpc.CallOption) (*RespondDecisionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RespondDecisionResponse)
+	err := c.cc.Invoke(ctx, Looper_RespondDecision_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LooperServer is the server API for Looper service.
 // All implementations must embed UnimplementedLooperServer
 // for forward compatibility.
@@ -73,6 +147,16 @@ type LooperServer interface {
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
 	// Shutdown asks the daemon to stop gracefully.
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
+	// StartLoop starts running a loop in the daemon and returns its run id.
+	StartLoop(context.Context, *StartLoopRequest) (*StartLoopResponse, error)
+	// StopLoop stops a running loop.
+	StopLoop(context.Context, *StopLoopRequest) (*StopLoopResponse, error)
+	// ListRuns returns the current runs known to the daemon.
+	ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error)
+	// StreamState streams state updates for a run (or all runs if run_id empty).
+	StreamState(*StreamStateRequest, grpc.ServerStreamingServer[StateUpdate]) error
+	// RespondDecision answers a pending decision request (manual step, failure).
+	RespondDecision(context.Context, *RespondDecisionRequest) (*RespondDecisionResponse, error)
 	mustEmbedUnimplementedLooperServer()
 }
 
@@ -88,6 +172,21 @@ func (UnimplementedLooperServer) Ping(context.Context, *PingRequest) (*PingRespo
 }
 func (UnimplementedLooperServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
+}
+func (UnimplementedLooperServer) StartLoop(context.Context, *StartLoopRequest) (*StartLoopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartLoop not implemented")
+}
+func (UnimplementedLooperServer) StopLoop(context.Context, *StopLoopRequest) (*StopLoopResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopLoop not implemented")
+}
+func (UnimplementedLooperServer) ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRuns not implemented")
+}
+func (UnimplementedLooperServer) StreamState(*StreamStateRequest, grpc.ServerStreamingServer[StateUpdate]) error {
+	return status.Error(codes.Unimplemented, "method StreamState not implemented")
+}
+func (UnimplementedLooperServer) RespondDecision(context.Context, *RespondDecisionRequest) (*RespondDecisionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RespondDecision not implemented")
 }
 func (UnimplementedLooperServer) mustEmbedUnimplementedLooperServer() {}
 func (UnimplementedLooperServer) testEmbeddedByValue()                {}
@@ -146,6 +245,89 @@ func _Looper_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Looper_StartLoop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartLoopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LooperServer).StartLoop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Looper_StartLoop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LooperServer).StartLoop(ctx, req.(*StartLoopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Looper_StopLoop_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopLoopRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LooperServer).StopLoop(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Looper_StopLoop_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LooperServer).StopLoop(ctx, req.(*StopLoopRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Looper_ListRuns_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRunsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LooperServer).ListRuns(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Looper_ListRuns_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LooperServer).ListRuns(ctx, req.(*ListRunsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Looper_StreamState_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamStateRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(LooperServer).StreamState(m, &grpc.GenericServerStream[StreamStateRequest, StateUpdate]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Looper_StreamStateServer = grpc.ServerStreamingServer[StateUpdate]
+
+func _Looper_RespondDecision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RespondDecisionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LooperServer).RespondDecision(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Looper_RespondDecision_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LooperServer).RespondDecision(ctx, req.(*RespondDecisionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Looper_ServiceDesc is the grpc.ServiceDesc for Looper service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -161,7 +343,29 @@ var Looper_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Shutdown",
 			Handler:    _Looper_Shutdown_Handler,
 		},
+		{
+			MethodName: "StartLoop",
+			Handler:    _Looper_StartLoop_Handler,
+		},
+		{
+			MethodName: "StopLoop",
+			Handler:    _Looper_StopLoop_Handler,
+		},
+		{
+			MethodName: "ListRuns",
+			Handler:    _Looper_ListRuns_Handler,
+		},
+		{
+			MethodName: "RespondDecision",
+			Handler:    _Looper_RespondDecision_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamState",
+			Handler:       _Looper_StreamState_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "proto/looper.proto",
 }

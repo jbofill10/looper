@@ -1,0 +1,297 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/jbofill10/looper/rpc"
+	"gopkg.in/yaml.v3"
+)
+
+// startTestServer starts a Server on a fresh unix socket in t.TempDir and
+// returns a connected client. The server is stopped and its listener
+// cleaned up via t.Cleanup.
+func startTestServer(t *testing.T) rpc.LooperClient {
+	t.Helper()
+	socketPath := filepath.Join(t.TempDir(), "looper.sock")
+
+	s := New()
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- s.Serve(socketPath)
+	}()
+	waitForSocket(t, socketPath, 2*time.Second)
+
+	client, conn := dial(t, socketPath)
+	t.Cleanup(func() {
+		conn.Close()
+		s.Stop()
+		select {
+		case <-serveErrCh:
+		case <-time.After(2 * time.Second):
+			t.Errorf("timed out waiting for Serve to return during cleanup")
+		}
+	})
+	return client
+}
+
+func writeLoopYAML(t *testing.T, dir, name string, body map[string]any) string {
+	t.Helper()
+	body["name"] = name
+	data, err := yaml.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal loop: %v", err)
+	}
+	path := filepath.Join(dir, name+".yaml")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write loop file: %v", err)
+	}
+	return path
+}
+
+func recvStateUpdate(t *testing.T, stream rpc.Looper_StreamStateClient) *rpc.StateUpdate {
+	t.Helper()
+	type result struct {
+		u   *rpc.StateUpdate
+		err error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		u, err := stream.Recv()
+		resCh <- result{u, err}
+	}()
+	select {
+	case r := <-resCh:
+		if r.err != nil {
+			t.Fatalf("stream.Recv: %v", r.err)
+		}
+		return r.u
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for a StateUpdate")
+	}
+	panic("unreachable")
+}
+
+func TestService_StartLoopAndStreamStateToRunDone(t *testing.T) {
+	client := startTestServer(t)
+	dir := t.TempDir()
+	path := writeLoopYAML(t, dir, "l", map[string]any{
+		"max_iterations": 1,
+		"steps": []map[string]any{
+			{"name": "s", "type": "script", "run": "true"},
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	startResp, err := client.StartLoop(ctx, &rpc.StartLoopRequest{
+		LoopFile: path,
+		BaseDir:  filepath.Join(dir, ".looper"),
+		Workdir:  dir,
+	})
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+	if startResp.RunId == "" {
+		t.Fatalf("expected non-empty run id")
+	}
+
+	stream, err := client.StreamState(ctx, &rpc.StreamStateRequest{RunId: startResp.RunId})
+	if err != nil {
+		t.Fatalf("StreamState: %v", err)
+	}
+
+	// The loop's single script step runs near-instantly, so depending on
+	// scheduling the client's StreamState call may join after step_start
+	// already fanned out to zero subscribers (only "state"/"log"-ish kinds
+	// are best-effort; decision_request and the final run_done are the
+	// kinds required to be reliable). What must always be observed is the
+	// terminal run_done with the correct final status.
+	for {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "run_done" {
+			if u.State != "done" {
+				t.Errorf("run_done State = %q, want done", u.State)
+			}
+			break
+		}
+	}
+
+	listResp, err := client.ListRuns(ctx, &rpc.ListRunsRequest{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(listResp.Runs) != 1 || listResp.Runs[0].Status != "done" {
+		t.Fatalf("ListRuns = %+v, want single done run", listResp.Runs)
+	}
+}
+
+func TestService_ManualLoopDecisionRequestRoundTrip(t *testing.T) {
+	client := startTestServer(t)
+	dir := t.TempDir()
+	path := writeLoopYAML(t, dir, "l", map[string]any{
+		"max_iterations": 1,
+		"steps": []map[string]any{
+			{"name": "gate", "type": "manual"},
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	startResp, err := client.StartLoop(ctx, &rpc.StartLoopRequest{
+		LoopFile: path,
+		BaseDir:  filepath.Join(dir, ".looper"),
+		Workdir:  dir,
+	})
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	stream, err := client.StreamState(ctx, &rpc.StreamStateRequest{RunId: startResp.RunId})
+	if err != nil {
+		t.Fatalf("StreamState: %v", err)
+	}
+
+	var reqID string
+	for {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "decision_request" {
+			reqID = u.RequestId
+			break
+		}
+	}
+	if reqID == "" {
+		t.Fatalf("expected a decision_request with a request id")
+	}
+
+	if _, err := client.RespondDecision(ctx, &rpc.RespondDecisionRequest{
+		RunId:     startResp.RunId,
+		RequestId: reqID,
+		Outcome:   "advance",
+	}); err != nil {
+		t.Fatalf("RespondDecision: %v", err)
+	}
+
+	for {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "run_done" {
+			if u.State != "done" {
+				t.Errorf("run_done State = %q, want done", u.State)
+			}
+			break
+		}
+	}
+}
+
+func TestService_StopLoop(t *testing.T) {
+	client := startTestServer(t)
+	dir := t.TempDir()
+	path := writeLoopYAML(t, dir, "l", map[string]any{
+		"steps": []map[string]any{
+			{"name": "sleep", "type": "script", "run": "sleep 0.2"},
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	startResp, err := client.StartLoop(ctx, &rpc.StartLoopRequest{
+		LoopFile: path,
+		BaseDir:  filepath.Join(dir, ".looper"),
+		Workdir:  dir,
+	})
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	stream, err := client.StreamState(ctx, &rpc.StreamStateRequest{RunId: startResp.RunId})
+	if err != nil {
+		t.Fatalf("StreamState: %v", err)
+	}
+	for {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "step_start" {
+			break
+		}
+	}
+
+	if _, err := client.StopLoop(ctx, &rpc.StopLoopRequest{RunId: startResp.RunId}); err != nil {
+		t.Fatalf("StopLoop: %v", err)
+	}
+
+	for {
+		u := recvStateUpdate(t, stream)
+		if u.Kind == "run_done" {
+			if u.State != "stopped" {
+				t.Errorf("run_done State = %q, want stopped", u.State)
+			}
+			break
+		}
+	}
+}
+
+func TestService_StreamStateUnsubscribesOnClientDisconnect(t *testing.T) {
+	// Regression guard: StreamState must not leak a subscriber forever once
+	// the client goes away. We can't observe internal Manager state from
+	// here, so this just exercises that the server keeps functioning after
+	// a stream is abandoned mid-flight.
+	client := startTestServer(t)
+	dir := t.TempDir()
+	path := writeLoopYAML(t, dir, "l", map[string]any{
+		"max_iterations": 1,
+		"steps": []map[string]any{
+			{"name": "s", "type": "script", "run": "true"},
+		},
+	})
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	startResp, err := client.StartLoop(shortCtx, &rpc.StartLoopRequest{
+		LoopFile: path, BaseDir: filepath.Join(dir, ".looper"), Workdir: dir,
+	})
+	if err != nil {
+		shortCancel()
+		t.Fatalf("StartLoop: %v", err)
+	}
+	stream, err := client.StreamState(shortCtx, &rpc.StreamStateRequest{RunId: startResp.RunId})
+	if err != nil {
+		shortCancel()
+		t.Fatalf("StreamState: %v", err)
+	}
+	_, _ = stream.Recv()
+	shortCancel() // abandon the stream
+
+	// A fresh call should still work fine.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := client.ListRuns(ctx, &rpc.ListRunsRequest{}); err != nil {
+		t.Fatalf("ListRuns after abandoned stream: %v", err)
+	}
+
+	// Make sure the run's background goroutine finishes (and stops writing
+	// under t.TempDir) before the test's cleanup removes the directory.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := client.ListRuns(ctx, &rpc.ListRunsRequest{})
+		if err != nil {
+			t.Fatalf("ListRuns: %v", err)
+		}
+		done := false
+		for _, r := range resp.Runs {
+			if r.RunId == startResp.RunId && r.Status != "running" {
+				done = true
+			}
+		}
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s did not finish before deadline", startResp.RunId)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
