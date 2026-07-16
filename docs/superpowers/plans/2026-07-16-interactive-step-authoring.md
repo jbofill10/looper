@@ -189,11 +189,14 @@ git commit -m "feat(config): add Step.Validate for per-step validation"
 - Create: `harness/plugin/.claude-plugin/plugin.json`
 - Create: `harness/plugin/skills/step-authoring/SKILL.md`
 - Create: `harness/plugin.go`
-- Delete: `harness/skill.go`
-- Delete: `harness/skills/loop-creation/SKILL.md` (and the now-empty
-  `harness/skills/` directory)
-- Delete: `harness/skill_test.go`
 - Test: `harness/plugin_test.go`
+
+Note: `harness/skill.go`/`harness/skill_test.go`/`harness/skills/` are
+NOT deleted in this task — `draft/draft.go` still calls
+`harness.EnsureLoopCreationSkill` until Task 4 deletes the whole `draft`
+package (its only caller). Deleting them here breaks the build. Task 4
+deletes all four (`draft/`, `harness/skill.go`, `harness/skill_test.go`,
+`harness/skills/`) together.
 
 **Interfaces:**
 - Produces: `const harness.StepAuthoringPluginName = "step-authoring"`,
@@ -549,6 +552,12 @@ git commit -m "feat(harness): add BuildStepAuthoring argv builder"
 - Create: `stepauthor/stepauthor_test.go`
 - Delete: `draft/draft.go`, `draft/draft_test.go` (and the now-empty
   `draft/` directory)
+- Delete: `harness/skill.go`, `harness/skill_test.go`,
+  `harness/skills/loop-creation/SKILL.md` (and the now-empty
+  `harness/skills/` directory) — `draft/draft.go` was their only caller
+  (via `harness.EnsureLoopCreationSkill`); Task 2 left them in place for
+  exactly this reason (see Task 2's note), so this task retires them
+  together with `draft/`.
 
 **Interfaces:**
 - Consumes: `harness.EnsureStepAuthoringPlugin() (string, error)` (Task 2),
@@ -1720,3 +1729,456 @@ git commit -m "chore: sweep stale references to the removed draft/DraftFn surfac
 ```
 
 (Skip this commit if Step 1 found nothing and no fixups were needed.)
+
+---
+
+### Task 9: Post-review fixes — lenient delete, reorder, concurrency stage
+
+Added after the whole-branch review found: (1) `deleteSelected` used strict
+`config.SaveLoop`, so delete failed whenever a sibling step was invalid or
+when deleting the loop's last step — contradicting the design's
+non-blocking validation guarantee; (2) reorder (spec §2: "Reorder and
+delete remain direct list operations the builder performs itself") was
+never implemented, only delete was; (3) loop-level concurrency, previously
+a simple text field in the old form, had no home in the rewritten builder.
+Per user decision: concurrency becomes a one-time, left/right-adjustable
+number stage (default 1) shown only when a brand-new loop is created,
+before its step list becomes editable; reorder becomes a `shift+up`/
+`shift+down` keybind.
+
+**Files:**
+- Modify: `builder/builder.go`
+- Modify: `builder/builder_test.go`
+
+**Interfaces:**
+- Produces: `(Model) AwaitingConcurrency() bool`, `(Model) Concurrency() int`
+  (new); `deleteSelected` and a new `moveSelected(delta int)` write via the
+  existing unexported `writeLoopFile` (lenient, no whole-loop `Validate`)
+  instead of `config.SaveLoop`.
+- Consumes: existing `config.Loop`/`config.Step`, `writeLoopFile`,
+  `loadLoopLenient` (all already in `builder/builder.go`).
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `builder/builder_test.go` (add `"os"` and `"reflect"` to the
+import block if not already present):
+
+```go
+func stepNames(steps []config.Step) []string {
+	names := make([]string, len(steps))
+	for i, s := range steps {
+		names[i] = s.Name
+	}
+	return names
+}
+
+func TestNew_FreshLoopAwaitsConcurrencyBeforeStepList(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/fresh.yaml", Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !m.AwaitingConcurrency() {
+		t.Fatal("expected a fresh loop to await concurrency selection")
+	}
+	if m.Concurrency() != 1 {
+		t.Errorf("Concurrency() = %d, want default 1", m.Concurrency())
+	}
+}
+
+func TestNew_ExistingLoopSkipsConcurrencyStage(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nconcurrency: 3\nsteps:\n  - name: a\n    type: manual\n")
+
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.AwaitingConcurrency() {
+		t.Fatal("expected an existing loop to skip the concurrency stage")
+	}
+}
+
+func TestConcurrency_AdjustAndConfirmWritesToFile(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/fresh.yaml"
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m = press(t, m, key("right"))
+	m = press(t, m, key("right"))
+	m = press(t, m, key("right")) // 1 -> 4
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.AwaitingConcurrency() {
+		t.Fatal("expected concurrency stage to end after enter")
+	}
+	if m.Concurrency() != 4 {
+		t.Errorf("Concurrency() = %d, want 4", m.Concurrency())
+	}
+
+	data, err := os.ReadFile(loopPath)
+	if err != nil {
+		t.Fatalf("reading loop file: %v", err)
+	}
+	if !strings.Contains(string(data), "concurrency: 4") {
+		t.Errorf("loop file missing concurrency: 4, got:\n%s", data)
+	}
+}
+
+func TestConcurrency_MinimumIsOne(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/fresh.yaml", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, key("left"))
+	if m.Concurrency() != 1 {
+		t.Errorf("Concurrency() = %d, want minimum 1", m.Concurrency())
+	}
+}
+
+func TestConcurrency_BlocksOtherKeysUntilConfirmed(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/fresh.yaml", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	m.opts.AuthorFn = func(req AuthorRequest) tea.Cmd {
+		called = true
+		return func() tea.Msg { return SessionDoneMsg{} }
+	}
+	m = press(t, m, key("c"))
+	if called {
+		t.Fatal("AuthorFn should not be invoked while awaiting concurrency")
+	}
+}
+
+func TestDeleteStep_SucceedsWithInvalidSiblingStep(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: ok\n    type: manual\n  - name: bad\n    type: interactive\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, key("d")) // cursor at "ok"; "bad" is invalid (no prompt)
+
+	data, err := os.ReadFile(loopPath)
+	if err != nil {
+		t.Fatalf("reading loop file: %v", err)
+	}
+	if strings.Contains(string(data), "name: ok") {
+		t.Errorf("expected step 'ok' to be deleted, file:\n%s", data)
+	}
+	if !strings.Contains(string(data), "name: bad") {
+		t.Errorf("expected step 'bad' to remain, file:\n%s", data)
+	}
+}
+
+func TestDeleteStep_CanDeleteLastStep(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: only\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, key("d"))
+
+	if len(m.Steps()) != 0 {
+		t.Errorf("Steps() = %+v, want empty after deleting the last step", m.Steps())
+	}
+	data, err := os.ReadFile(loopPath)
+	if err != nil {
+		t.Fatalf("reading loop file: %v", err)
+	}
+	if strings.Contains(string(data), "name: only") {
+		t.Errorf("expected the last step to be deleted, file:\n%s", data)
+	}
+}
+
+func TestReorder_MovesStepDownAndUp(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n  - name: b\n    type: manual\n  - name: c\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyShiftDown}) // cursor at "a" -> moves past "b"
+	if got := stepNames(m.Steps()); !reflect.DeepEqual(got, []string{"b", "a", "c"}) {
+		t.Fatalf("after move down: steps = %v, want [b a c]", got)
+	}
+
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyShiftUp}) // move back past "b"
+	if got := stepNames(m.Steps()); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+		t.Fatalf("after move up: steps = %v, want [a b c]", got)
+	}
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `go test ./builder/... -v`
+Expected: FAIL — build failure (`AwaitingConcurrency`/`Concurrency`
+undefined; reorder/concurrency behavior not yet implemented)
+
+- [ ] **Step 3: Implement the fixes**
+
+In `builder/builder.go`:
+
+1. Add two fields to `Model`: `awaitingConcurrency bool` and
+   `concurrencyChoice int`.
+
+2. Update `New` to set the skeleton's `Concurrency: 1` explicitly, track
+   whether the loop file was freshly created, and initialize the new
+   fields:
+
+```go
+func New(projectDir, loopPath string, opts Options) (Model, error) {
+	loop, err := loadLoopLenient(loopPath)
+	freshLoop := false
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return Model{}, fmt.Errorf("load loop: %w", err)
+		}
+		skeleton := &config.Loop{Name: loopName(loopPath), Concurrency: 1, Steps: []config.Step{}}
+		if saveErr := writeLoopFile(skeleton, loopPath); saveErr != nil {
+			return Model{}, fmt.Errorf("write new loop skeleton: %w", saveErr)
+		}
+		loop = skeleton
+		freshLoop = true
+	}
+
+	m := Model{
+		opts:                opts,
+		projectDir:          projectDir,
+		loopPath:            loopPath,
+		loop:                loop,
+		awaitingConcurrency: freshLoop,
+		concurrencyChoice:   loop.Concurrency,
+	}
+	if m.concurrencyChoice < 1 {
+		m.concurrencyChoice = 1
+	}
+	m.revalidate()
+	return m, nil
+}
+```
+
+3. Add two accessors, next to `Path()`/`Quit()`:
+
+```go
+// AwaitingConcurrency reports whether the model is still on the initial
+// concurrency-selection stage shown once for a brand-new loop, before its
+// step list becomes editable.
+func (m Model) AwaitingConcurrency() bool {
+	return m.awaitingConcurrency
+}
+
+// Concurrency returns the concurrency value currently selected (while
+// AwaitingConcurrency) or already saved (once confirmed).
+func (m Model) Concurrency() int {
+	return m.concurrencyChoice
+}
+```
+
+4. Change `handleKey` to gate on the concurrency stage first, and add the
+   `shift+up`/`shift+down` reorder keys to the normal step-list switch:
+
+```go
+func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.awaitingConcurrency {
+		return m.handleConcurrencyKey(key)
+	}
+	if m.authoring {
+		return m, nil
+	}
+	switch key.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return m, nil
+	case "down", "j":
+		if m.cursor < len(m.loop.Steps)-1 {
+			m.cursor++
+		}
+		return m, nil
+	case "shift+up":
+		return m.moveSelected(-1)
+	case "shift+down":
+		return m.moveSelected(1)
+	case "c":
+		return m.requestAuthor("")
+	case "e":
+		if len(m.loop.Steps) == 0 {
+			return m, nil
+		}
+		return m.requestAuthor(m.loop.Steps[m.cursor].Name)
+	case "d":
+		return m.deleteSelected()
+	case "q":
+		m.quit = true
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleConcurrencyKey handles the initial concurrency-selection stage
+// for a brand-new loop: left/right adjust the value (minimum 1), enter
+// confirms and writes it to the file, q quits without confirming.
+func (m Model) handleConcurrencyKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "left":
+		if m.concurrencyChoice > 1 {
+			m.concurrencyChoice--
+		}
+		return m, nil
+	case "right":
+		m.concurrencyChoice++
+		return m, nil
+	case "enter":
+		updated := *m.loop
+		updated.Concurrency = m.concurrencyChoice
+		if err := writeLoopFile(&updated, m.loopPath); err != nil {
+			m.errMsg = fmt.Sprintf("set concurrency: %v", err)
+			return m, nil
+		}
+		m.loop = &updated
+		m.awaitingConcurrency = false
+		m.errMsg = ""
+		return m, nil
+	case "q":
+		m.quit = true
+		return m, nil
+	}
+	return m, nil
+}
+```
+
+5. Add `moveSelected`, next to `deleteSelected`:
+
+```go
+// moveSelected swaps the selected step with its neighbor delta positions
+// away (-1 = earlier, +1 = later), writes the reordered list directly to
+// the file (no authoring session), and moves the cursor to follow it. A
+// delta that would move past either end of the list is a no-op.
+func (m Model) moveSelected(delta int) (tea.Model, tea.Cmd) {
+	target := m.cursor + delta
+	if target < 0 || target >= len(m.loop.Steps) {
+		return m, nil
+	}
+	next := append([]config.Step{}, m.loop.Steps...)
+	next[m.cursor], next[target] = next[target], next[m.cursor]
+
+	updated := *m.loop
+	updated.Steps = next
+	if err := writeLoopFile(&updated, m.loopPath); err != nil {
+		m.errMsg = fmt.Sprintf("reorder step: %v", err)
+		return m, nil
+	}
+	m.loop = &updated
+	m.cursor = target
+	m.revalidate()
+	m.errMsg = ""
+	return m, nil
+}
+```
+
+6. Fix `deleteSelected` to use the lenient `writeLoopFile` instead of the
+   strict, whole-loop-validating `config.SaveLoop` — this is the actual
+   bug fix, allowing delete to succeed when a sibling step is invalid or
+   when deleting the loop's last remaining step:
+
+```go
+func (m Model) deleteSelected() (tea.Model, tea.Cmd) {
+	if len(m.loop.Steps) == 0 {
+		return m, nil
+	}
+	next := append([]config.Step{}, m.loop.Steps[:m.cursor]...)
+	next = append(next, m.loop.Steps[m.cursor+1:]...)
+	updated := *m.loop
+	updated.Steps = next
+	if err := writeLoopFile(&updated, m.loopPath); err != nil {
+		m.errMsg = fmt.Sprintf("delete step: %v", err)
+		return m, nil
+	}
+	m.loop = &updated
+	if m.cursor >= len(m.loop.Steps) {
+		m.cursor = len(m.loop.Steps) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.revalidate()
+	m.errMsg = ""
+	return m, nil
+}
+```
+
+7. Update `View` to render the concurrency stage distinctly when active,
+   and update the step list's footer hint to disambiguate cursor movement
+   from reordering:
+
+```go
+func (m Model) View() string {
+	if m.awaitingConcurrency {
+		return m.viewConcurrency()
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Loop: %s", m.loop.Name)))
+
+	if len(m.loop.Steps) == 0 {
+		b.WriteString(style.Label.Render("(no steps yet — press c to create one)") + "\n")
+	}
+	for i, s := range m.loop.Steps {
+		marker := "  "
+		if i == m.cursor {
+			marker = style.Marker.Render("▸ ")
+		}
+		line := fmt.Sprintf("%s (%s)", s.Name, s.Type)
+		if err, bad := m.stepErrors[s.Name]; bad {
+			line = style.Error.Render(line + " — " + err.Error())
+		}
+		fmt.Fprintf(&b, "%s%s\n", marker, line)
+	}
+
+	if m.authoring {
+		fmt.Fprintf(&b, "\n%s\n", style.Busy.Render("session running…"))
+	}
+	if m.errMsg != "" {
+		fmt.Fprintf(&b, "\n%s\n", style.Error.Render("! "+m.errMsg))
+	}
+	b.WriteString("\n" + style.KeyHint.Render("[c] create-step  [e] edit-step  [d] delete  [↑/↓] cursor  [shift+↑/↓] reorder  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewConcurrency renders the one-time concurrency-selection stage shown
+// for a brand-new loop, before its step list becomes editable.
+func (m Model) viewConcurrency() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Loop: %s", m.loop.Name)))
+	fmt.Fprintf(&b, "%s %s\n", style.Label.Render("Concurrency:"), style.Select.Render(fmt.Sprintf("‹ %d ›", m.concurrencyChoice)))
+	b.WriteString("\n" + style.KeyHint.Render("[←/→] change  [enter] confirm  [q] quit") + "\n")
+	return b.String()
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `go test ./builder/... -v`
+Expected: PASS (all new tests plus the full existing suite)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add builder/builder.go builder/builder_test.go
+git commit -m "fix(builder): lenient delete, add reorder and a concurrency stage for new loops"
+```

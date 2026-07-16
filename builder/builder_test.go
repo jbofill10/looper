@@ -1,6 +1,8 @@
 package builder
 
 import (
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -9,8 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// press feeds a synthetic tea.KeyMsg to m.Update and returns the resulting
-// Model.
 func press(t *testing.T, m Model, msg tea.Msg) Model {
 	t.Helper()
 	next, _ := m.Update(msg)
@@ -21,422 +21,349 @@ func press(t *testing.T, m Model, msg tea.Msg) Model {
 	return mm
 }
 
-func key(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
+func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
-// typeString feeds each rune of s as a synthetic tea.KeyMsg, simulating a
-// user typing s into the focused text field.
-func typeString(t *testing.T, m Model, s string) Model {
+func writeLoop(t *testing.T, path, body string) {
 	t.Helper()
-	for _, r := range s {
-		m = press(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	if err := os.MkdirAll(dirOf(path), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	return m
-}
-
-// tabTo presses tab until m.focus reaches target, failing after a generous
-// number of presses (well beyond the longest possible field list).
-func tabTo(t *testing.T, m Model, target fieldID) Model {
-	t.Helper()
-	for i := 0; i < 20; i++ {
-		if m.focus == target {
-			return m
-		}
-		m = press(t, m, key(tea.KeyTab))
-	}
-	t.Fatalf("could not reach field %v; stuck at %v", target, m.focus)
-	return m
-}
-
-// selectValue presses right until the focused select field's current
-// option equals want, failing if it cycles all the way around without
-// finding it.
-func selectValue(t *testing.T, m Model, id fieldID, want string) Model {
-	t.Helper()
-	opts := m.selectOptions(id)
-	for i := 0; i < len(opts)+1; i++ {
-		if opts[m.selectIdx(id)] == want {
-			return m
-		}
-		m = press(t, m, key(tea.KeyRight))
-	}
-	t.Fatalf("option %q not found among %v", want, opts)
-	return m
-}
-
-func TestBuilder_TwoStepLoop(t *testing.T) {
-	m := New(nil, nil, Options{})
-
-	m = typeString(t, m, "dev-loop")
-	m = tabTo(t, m, fStepName)
-
-	m = typeString(t, m, "get-task")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "script")
-
-	m = tabTo(t, m, fStepRun)
-	m = typeString(t, m, "echo TASK_ID=1 >> $LOOPER_OUTPUT")
-
-	m = tabTo(t, m, fStepOutputs)
-	m = typeString(t, m, "TASK_ID")
-
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if len(m.steps) != 1 {
-		t.Fatalf("got %d steps after add, want 1", len(m.steps))
-	}
-	if m.focus != fStepName {
-		t.Errorf("focus after add = %v, want fStepName", m.focus)
-	}
-
-	m = typeString(t, m, "review")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if len(m.steps) != 2 {
-		t.Fatalf("got %d steps after second add, want 2", len(m.steps))
-	}
-
-	m = tabTo(t, m, fFinish)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if !m.Done() {
-		t.Fatalf("expected Done() true, errMsg=%q", m.errMsg)
-	}
-
-	l, ok := m.Loop()
-	if !ok {
-		t.Fatalf("Loop() ok = false, want true")
-	}
-	if l.Name != "dev-loop" {
-		t.Errorf("name = %q, want dev-loop", l.Name)
-	}
-	if l.Concurrency != 1 {
-		t.Errorf("concurrency = %d, want 1", l.Concurrency)
-	}
-	if len(l.Steps) != 2 {
-		t.Fatalf("got %d steps, want 2", len(l.Steps))
-	}
-	s0 := l.Steps[0]
-	if s0.Name != "get-task" || s0.Type != config.StepScript {
-		t.Errorf("step0 = %+v, want name get-task type script", s0)
-	}
-	if s0.Run != "echo TASK_ID=1 >> $LOOPER_OUTPUT" {
-		t.Errorf("step0.Run = %q", s0.Run)
-	}
-	if len(s0.Outputs) != 1 || s0.Outputs[0] != "TASK_ID" {
-		t.Errorf("step0.Outputs = %v, want [TASK_ID]", s0.Outputs)
-	}
-	if s0.OnFail != config.OnFailAsk {
-		t.Errorf("step0.OnFail = %q, want ask", s0.OnFail)
-	}
-	s1 := l.Steps[1]
-	if s1.Name != "review" || s1.Type != config.StepManual {
-		t.Errorf("step1 = %+v, want name review type manual", s1)
-	}
-
-	if err := l.Validate(); err != nil {
-		t.Errorf("produced loop failed Validate: %v", err)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestBuilder_SelectFieldsCycleAndWrap(t *testing.T) {
-	m := New(nil, []string{"gemini"}, Options{})
-	m = tabTo(t, m, fStepType)
-
-	if got := m.selectOptions(fStepType)[m.selectIdx(fStepType)]; got != "script" {
-		t.Fatalf("initial step type = %q, want script (index 0)", got)
+func dirOf(path string) string {
+	i := strings.LastIndex(path, "/")
+	if i < 0 {
+		return "."
 	}
+	return path[:i]
+}
 
-	m = press(t, m, key(tea.KeyRight))
-	if got := m.selectOptions(fStepType)[m.selectIdx(fStepType)]; got != "headless" {
-		t.Errorf("after right, step type = %q, want headless", got)
+func TestNew_CreatesSkeletonWhenLoopFileMissing(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/fresh.yaml"
+
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-
-	m = press(t, m, key(tea.KeyLeft))
-	if got := m.selectOptions(fStepType)[m.selectIdx(fStepType)]; got != "script" {
-		t.Errorf("after left, step type = %q, want script", got)
+	if len(m.Steps()) != 0 {
+		t.Errorf("got %d steps, want 0 for a fresh skeleton", len(m.Steps()))
 	}
-
-	// left from the first option wraps to the last.
-	m = press(t, m, key(tea.KeyLeft))
-	if got := m.selectOptions(fStepType)[m.selectIdx(fStepType)]; got != "manual" {
-		t.Errorf("after wrap-left, step type = %q, want manual", got)
+	if _, err := os.Stat(loopPath); err != nil {
+		t.Errorf("expected skeleton written at %s: %v", loopPath, err)
 	}
 }
 
-func TestBuilder_HarnessSelectIncludesConfiguredNames(t *testing.T) {
-	m := New(nil, []string{"gemini", "claude"}, Options{})
-	if got := m.harnessOptions; len(got) != 3 || got[0] != "(default)" {
-		t.Fatalf("harnessOptions = %v, want [(default) claude gemini]", got)
+func TestNew_LoadsExistingLoop(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n")
+
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-	if m.harnessOptions[1] != "claude" || m.harnessOptions[2] != "gemini" {
-		t.Errorf("harnessOptions not sorted: %v", m.harnessOptions)
+	if len(m.Steps()) != 1 || m.Steps()[0].Name != "a" {
+		t.Errorf("Steps() = %+v, want one step named a", m.Steps())
 	}
 }
 
-func TestBuilder_HeadlessStepUsesSelectedHarness(t *testing.T) {
-	m := New(nil, []string{"gemini"}, Options{})
-	m = typeString(t, m, "loop")
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "work")
-
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "headless")
-
-	m = tabTo(t, m, fStepPrompt)
-	m = typeString(t, m, "do the thing")
-
-	m = tabTo(t, m, fStepHarness)
-	m = selectValue(t, m, fStepHarness, "gemini")
-
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if len(m.steps) != 1 {
-		t.Fatalf("got %d steps, want 1", len(m.steps))
-	}
-	s := m.steps[0]
-	if s.Harness != "gemini" {
-		t.Errorf("step.Harness = %q, want gemini", s.Harness)
-	}
-	if s.Prompt != "do the thing" {
-		t.Errorf("step.Prompt = %q", s.Prompt)
+func TestCreateStep_InvokesAuthorFnWithBlankStepName(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/fresh.yaml"
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	m = tabTo(t, m, fFinish)
-	m = press(t, m, key(tea.KeyEnter))
-	if !m.Done() {
-		t.Fatalf("expected Done() true, errMsg=%q", m.errMsg)
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // confirm default concurrency
+
+	var gotReq AuthorRequest
+	m.opts.AuthorFn = func(req AuthorRequest) tea.Cmd {
+		gotReq = req
+		return func() tea.Msg { return SessionDoneMsg{} }
+	}
+
+	m = press(t, m, key("c"))
+	if gotReq.StepName != "" {
+		t.Errorf("StepName = %q, want empty for create-step", gotReq.StepName)
+	}
+	if gotReq.LoopPath != loopPath {
+		t.Errorf("LoopPath = %q, want %q", gotReq.LoopPath, loopPath)
 	}
 }
 
-func TestBuilder_AddStepRejectsDuplicateName(t *testing.T) {
-	m := New(nil, nil, Options{})
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "same")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-	if len(m.steps) != 1 {
-		t.Fatalf("got %d steps, want 1", len(m.steps))
+func TestEditStep_InvokesAuthorFnWithSelectedStepAndNoError(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	m = typeString(t, m, "same")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
+	var gotReq AuthorRequest
+	m.opts.AuthorFn = func(req AuthorRequest) tea.Cmd {
+		gotReq = req
+		return func() tea.Msg { return SessionDoneMsg{} }
+	}
 
-	if len(m.steps) != 1 {
-		t.Errorf("got %d steps after duplicate add, want still 1", len(m.steps))
+	m = press(t, m, key("e"))
+	if gotReq.StepName != "a" {
+		t.Errorf("StepName = %q, want a", gotReq.StepName)
 	}
-	if m.errMsg == "" {
-		t.Errorf("expected errMsg for duplicate step name")
-	}
-	if m.focus != fStepName {
-		t.Errorf("focus = %v, want fStepName after duplicate error", m.focus)
+	if gotReq.ValidationErr != nil {
+		t.Errorf("ValidationErr = %v, want nil for a valid step", gotReq.ValidationErr)
 	}
 }
 
-func TestBuilder_ScriptStepRequiresRun(t *testing.T) {
-	m := New(nil, nil, Options{})
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "build")
-	// step type defaults to script; leave Run blank.
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
+func TestSessionDoneMsg_ReloadsAndFlagsInvalidStep(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if len(m.steps) != 0 {
-		t.Fatalf("got %d steps, want 0 (blank run should be rejected)", len(m.steps))
-	}
-	if m.errMsg == "" {
-		t.Errorf("expected errMsg for missing run command")
-	}
-	if m.focus != fStepRun {
-		t.Errorf("focus = %v, want fStepRun", m.focus)
+	// Simulate the harness session having rewritten the file with an
+	// invalid step before signaling done.
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: interactive\n")
+	m = press(t, m, SessionDoneMsg{})
+
+	errs := m.StepErrors()
+	if errs["a"] == nil {
+		t.Errorf("expected step %q to be flagged invalid after reload", "a")
 	}
 }
 
-func TestBuilder_FinishRequiresLoopNameAndAtLeastOneStep(t *testing.T) {
-	m := New(nil, nil, Options{})
-	m = tabTo(t, m, fFinish)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if m.Done() {
-		t.Fatalf("expected Done() false with no name and no steps")
+func TestRevalidate_FlagsDuplicateStepNamesOnBothSteps(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n  - name: a\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m.errMsg == "" {
-		t.Errorf("expected errMsg")
+
+	errs := m.StepErrors()
+	if len(m.Steps()) != 2 {
+		t.Fatalf("expected 2 steps loaded, got %d", len(m.Steps()))
+	}
+	if errs["a"] == nil {
+		t.Errorf("expected duplicate step name %q to be flagged invalid", "a")
 	}
 }
 
-func TestBuilder_ConcurrencyParsing(t *testing.T) {
-	m := New(nil, nil, Options{})
-	m = typeString(t, m, "loop")
-	m = tabTo(t, m, fConcurrency)
-	m = typeString(t, m, "4")
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "s")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-	m = tabTo(t, m, fFinish)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if !m.Done() {
-		t.Fatalf("expected Done() true, errMsg=%q", m.errMsg)
+func TestEditStep_OnInvalidStepIncludesErrorInRequest(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: interactive\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	loop, _ := m.Loop()
-	if loop.Concurrency != 4 {
-		t.Errorf("concurrency = %d, want 4", loop.Concurrency)
+
+	var gotReq AuthorRequest
+	m.opts.AuthorFn = func(req AuthorRequest) tea.Cmd {
+		gotReq = req
+		return func() tea.Msg { return SessionDoneMsg{} }
+	}
+
+	m = press(t, m, key("e"))
+	if gotReq.ValidationErr == nil {
+		t.Fatal("expected ValidationErr to be set for an invalid step")
 	}
 }
 
-func TestBuilder_ConcurrencyInvalidBlocksFinish(t *testing.T) {
-	m := New(nil, nil, Options{})
-	m = typeString(t, m, "loop")
-	m = tabTo(t, m, fConcurrency)
-	m = typeString(t, m, "nope")
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "s")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-	m = tabTo(t, m, fFinish)
-	m = press(t, m, key(tea.KeyEnter))
-
-	if m.Done() {
-		t.Fatalf("expected Done() false with invalid concurrency")
+func TestDeleteStep_RewritesFileWithoutSession(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n  - name: b\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m.focus != fConcurrency {
-		t.Errorf("focus = %v, want fConcurrency", m.focus)
+
+	m = press(t, m, key("d")) // deletes the selected (first) step, "a"
+
+	loop, err := config.LoadLoop(loopPath)
+	if err != nil {
+		t.Fatalf("LoadLoop after delete: %v", err)
+	}
+	if len(loop.Steps) != 1 || loop.Steps[0].Name != "b" {
+		t.Errorf("steps after delete = %+v, want only step b", loop.Steps)
 	}
 }
 
-func TestBuilder_EditingPreservesNameConcurrencyAndSteps(t *testing.T) {
-	existing := &config.Loop{
-		Name:        "old-loop",
-		Concurrency: 5,
-		Steps: []config.Step{
-			{Name: "existing-step", Type: config.StepManual},
-		},
+func TestQuit_SetOnQKey(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/x.yaml", Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	m := New(existing, nil, Options{})
-	if m.name != "old-loop" {
-		t.Errorf("name = %q, want old-loop preloaded", m.name)
-	}
-	if m.concurrency != "5" {
-		t.Errorf("concurrency buffer = %q, want 5 preloaded", m.concurrency)
-	}
-	if len(m.steps) != 1 || m.steps[0].Name != "existing-step" {
-		t.Fatalf("steps = %+v, want [existing-step] preloaded", m.steps)
-	}
-
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "step-two")
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-	m = tabTo(t, m, fAddStep)
-	m = press(t, m, key(tea.KeyEnter))
-	m = tabTo(t, m, fFinish)
-	m = press(t, m, key(tea.KeyEnter))
-
-	loop, ok := m.Loop()
-	if !ok {
-		t.Fatalf("Loop() ok = false")
-	}
-	if loop.Name != "old-loop" || loop.Concurrency != 5 {
-		t.Errorf("loop = %+v, want name old-loop concurrency 5 preserved", loop)
-	}
-	if len(loop.Steps) != 2 || loop.Steps[0].Name != "existing-step" || loop.Steps[1].Name != "step-two" {
-		t.Fatalf("steps = %+v, want [existing-step step-two]", loop.Steps)
+	m = press(t, m, key("q"))
+	if !m.Quit() {
+		t.Error("Quit() = false after pressing q, want true")
 	}
 }
 
-func TestBuilder_Backspace(t *testing.T) {
-	m := New(nil, nil, Options{})
-	m = typeString(t, m, "devv")
-	m = press(t, m, key(tea.KeyBackspace))
-	if m.name != "dev" {
-		t.Fatalf("name = %q, want dev after backspace", m.name)
+func stepNames(steps []config.Step) []string {
+	names := make([]string, len(steps))
+	for i, s := range steps {
+		names[i] = s.Name
+	}
+	return names
+}
+
+func TestNew_FreshLoopAwaitsConcurrencyBeforeStepList(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/fresh.yaml", Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !m.AwaitingConcurrency() {
+		t.Fatal("expected a fresh loop to await concurrency selection")
+	}
+	if m.Concurrency() != 1 {
+		t.Errorf("Concurrency() = %d, want default 1", m.Concurrency())
 	}
 }
 
-func TestBuilder_DraftRequiresScriptStepAndInvokesDraftFn(t *testing.T) {
-	var got DraftRequest
+func TestNew_ExistingLoopSkipsConcurrencyStage(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nconcurrency: 3\nsteps:\n  - name: a\n    type: manual\n")
+
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.AwaitingConcurrency() {
+		t.Fatal("expected an existing loop to skip the concurrency stage")
+	}
+}
+
+func TestConcurrency_AdjustAndConfirmWritesToFile(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/fresh.yaml"
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m = press(t, m, key("right"))
+	m = press(t, m, key("right"))
+	m = press(t, m, key("right")) // 1 -> 4
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.AwaitingConcurrency() {
+		t.Fatal("expected concurrency stage to end after enter")
+	}
+	if m.Concurrency() != 4 {
+		t.Errorf("Concurrency() = %d, want 4", m.Concurrency())
+	}
+
+	data, err := os.ReadFile(loopPath)
+	if err != nil {
+		t.Fatalf("reading loop file: %v", err)
+	}
+	if !strings.Contains(string(data), "concurrency: 4") {
+		t.Errorf("loop file missing concurrency: 4, got:\n%s", data)
+	}
+}
+
+func TestConcurrency_MinimumIsOne(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/fresh.yaml", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, key("left"))
+	if m.Concurrency() != 1 {
+		t.Errorf("Concurrency() = %d, want minimum 1", m.Concurrency())
+	}
+}
+
+func TestConcurrency_BlocksOtherKeysUntilConfirmed(t *testing.T) {
+	dir := t.TempDir()
+	m, err := New(dir, dir+"/.looper/loops/fresh.yaml", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	called := false
-	opts := Options{
-		DraftFn: func(req DraftRequest) tea.Cmd {
-			called = true
-			got = req
-			return func() tea.Msg { return DraftedMsg{Content: "echo hi\n"} }
-		},
-	}
-
-	m := New(nil, nil, opts)
-	m = typeString(t, m, "loop")
-	m = tabTo(t, m, fStepName)
-	m = typeString(t, m, "build")
-	// step type already defaults to script.
-
-	m = press(t, m, key(tea.KeyCtrlD))
-	if !called {
-		t.Fatalf("DraftFn was not invoked for a script step")
-	}
-	if got.LoopName != "loop" || got.StepName != "build" {
-		t.Errorf("DraftRequest = %+v, want LoopName=loop StepName=build", got)
-	}
-	if !m.drafting {
-		t.Errorf("expected drafting=true after requesting a draft session")
-	}
-
-	next, _ := m.Update(DraftedMsg{Content: "echo hi\n"})
-	m = next.(Model)
-	if m.drafting {
-		t.Errorf("expected drafting=false after DraftedMsg")
-	}
-	if m.curRun != "echo hi" {
-		t.Errorf("curRun = %q, want %q (trimmed)", m.curRun, "echo hi")
-	}
-}
-
-func TestBuilder_DraftIgnoredForNonScriptStep(t *testing.T) {
-	called := false
-	opts := Options{DraftFn: func(DraftRequest) tea.Cmd {
+	m.opts.AuthorFn = func(req AuthorRequest) tea.Cmd {
 		called = true
-		return nil
-	}}
-
-	m := New(nil, nil, opts)
-	m = tabTo(t, m, fStepType)
-	m = selectValue(t, m, fStepType, "manual")
-	m = press(t, m, key(tea.KeyCtrlD))
-
+		return func() tea.Msg { return SessionDoneMsg{} }
+	}
+	m = press(t, m, key("c"))
 	if called {
-		t.Errorf("DraftFn should not be invoked for a manual step")
+		t.Fatal("AuthorFn should not be invoked while awaiting concurrency")
 	}
 }
 
-func TestBuilder_DraftedMsgErrorSetsErrMsg(t *testing.T) {
-	m := New(nil, nil, Options{})
-	next, _ := m.Update(DraftedMsg{Err: errString("boom")})
-	m = next.(Model)
-	if m.drafting {
-		t.Errorf("expected drafting=false after an errored DraftedMsg")
+func TestDeleteStep_SucceedsWithInvalidSiblingStep(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: ok\n    type: manual\n  - name: bad\n    type: interactive\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(m.errMsg, "boom") {
-		t.Errorf("errMsg = %q, want it to mention the underlying error", m.errMsg)
+	m = press(t, m, key("d")) // cursor at "ok"; "bad" is invalid (no prompt)
+
+	data, err := os.ReadFile(loopPath)
+	if err != nil {
+		t.Fatalf("reading loop file: %v", err)
+	}
+	if strings.Contains(string(data), "name: ok") {
+		t.Errorf("expected step 'ok' to be deleted, file:\n%s", data)
+	}
+	if !strings.Contains(string(data), "name: bad") {
+		t.Errorf("expected step 'bad' to remain, file:\n%s", data)
 	}
 }
 
-type errString string
+func TestDeleteStep_CanDeleteLastStep(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: only\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, key("d"))
 
-func (e errString) Error() string { return string(e) }
+	if len(m.Steps()) != 0 {
+		t.Errorf("Steps() = %+v, want empty after deleting the last step", m.Steps())
+	}
+	data, err := os.ReadFile(loopPath)
+	if err != nil {
+		t.Fatalf("reading loop file: %v", err)
+	}
+	if strings.Contains(string(data), "name: only") {
+		t.Errorf("expected the last step to be deleted, file:\n%s", data)
+	}
+}
+
+func TestReorder_MovesStepDownAndUp(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n  - name: b\n    type: manual\n  - name: c\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyShiftDown}) // cursor at "a" -> moves past "b"
+	if got := stepNames(m.Steps()); !reflect.DeepEqual(got, []string{"b", "a", "c"}) {
+		t.Fatalf("after move down: steps = %v, want [b a c]", got)
+	}
+
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyShiftUp}) // move back past "b"
+	if got := stepNames(m.Steps()); !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+		t.Fatalf("after move up: steps = %v, want [a b c]", got)
+	}
+}

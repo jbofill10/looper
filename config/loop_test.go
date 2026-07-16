@@ -116,3 +116,45 @@ steps:
 		t.Errorf("task_var = %q, want ISSUE_ID", loop.TaskVar)
 	}
 }
+
+func TestStepValidate_Valid(t *testing.T) {
+	cases := []Step{
+		{Name: "a", Type: StepManual},
+		{Name: "a", Type: StepScript, Run: "true"},
+		{Name: "a", Type: StepHeadless, Prompt: "go"},
+		{Name: "a", Type: StepInteractive, Prompt: "go"},
+	}
+	for _, s := range cases {
+		if err := s.Validate(); err != nil {
+			t.Errorf("Validate(%+v): %v", s, err)
+		}
+	}
+}
+
+func TestStepValidate_DefaultsOnFail(t *testing.T) {
+	s := Step{Name: "a", Type: StepScript, Run: "true"}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if s.OnFail != OnFailAsk {
+		t.Errorf("on_fail = %q, want default %q", s.OnFail, OnFailAsk)
+	}
+}
+
+func TestStepValidate_InvalidCases(t *testing.T) {
+	cases := map[string]Step{
+		"no name":                    {Type: StepManual},
+		"unknown type":               {Name: "a", Type: "bogus"},
+		"script missing run":         {Name: "a", Type: StepScript},
+		"headless missing prompt":    {Name: "a", Type: StepHeadless},
+		"interactive missing prompt": {Name: "a", Type: StepInteractive},
+		"bad on_fail":                {Name: "a", Type: StepScript, Run: "true", OnFail: "explode"},
+	}
+	for label, s := range cases {
+		t.Run(label, func(t *testing.T) {
+			if err := s.Validate(); err == nil {
+				t.Fatalf("expected error for %q, got nil", label)
+			}
+		})
+	}
+}

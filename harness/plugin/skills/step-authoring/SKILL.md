@@ -1,13 +1,15 @@
 ---
-name: loop-creation
-description: Use when drafting or editing a shell command/script for a looper "script" step, or otherwise helping a user author a looper loop's YAML. Looper is a Go CLI that runs an ordered list of steps as concurrent workers, looping. Covers the step schema, the environment a script step runs in, and how outputs/failure-handling work.
+name: step-authoring
+description: Use when creating or editing a step in a looper loop's YAML file (.looper/loops/<name>.yaml). Looper is a Go CLI that runs an ordered list of steps as concurrent workers, looping. Covers all four step types, the step schema, the environment a script step runs in, and how outputs/failure-handling work.
 ---
 
-# looper loop & step authoring
+# looper step authoring
 
-looper loads a loop definition from `.looper/loops/<name>.yaml`. A loop is
-an ordered list of **steps**; each worker drives one work unit through
-every step, then loops back to the first step for the next unit.
+You are editing a loop file directly: `.looper/loops/<name>.yaml`. A loop
+is an ordered list of **steps**; each worker drives one work unit through
+every step, then loops back to the first step for the next unit. Ask the
+user what the step should do (or what they want changed, if editing an
+existing one), then edit the YAML file yourself to match.
 
 ## Step schema (YAML fields, and the equivalent Go struct in
 `config.Step`)
@@ -28,6 +30,12 @@ every step, then loops back to the first step for the next unit.
   signals_no_work: false  # script steps only: see "Signaling no work"
 ```
 
+## The `manual` step type
+
+A `manual` step needs only `name` and `type: manual` — it's a pause point
+where a human confirms something by hand before the worker continues. It
+has no `run`, `prompt`, `harness`, `on_fail`, or meaningful `outputs`.
+
 ## Writing a script step's `run`
 
 A script step's `run` is executed as `sh -c "<run>"` with:
@@ -43,9 +51,8 @@ A script step's `run` is executed as `sh -c "<run>"` with:
     - `ask` (default): a human is prompted to advance/retry/abort.
     - `retry`: the step re-runs.
     - `abort`: the worker's whole iteration aborts.
-  - If `signals_no_work: true`, a specific exit code (consult the
-    codebase's `runner.NoWorkExitCode` if precision matters) instead
-    signals "no work available right now" rather than a failure.
+  - If `signals_no_work: true`, a specific exit code signals "no work
+    available right now" rather than a failure.
 
 Write scripts that are safe to retry (idempotent) since `on_fail: retry`
 or a human choosing "retry" re-runs the same command with the same
@@ -79,24 +86,15 @@ of running a plain shell command:
 
 - `headless` runs the harness non-interactively (`claude -p "<prompt>"`)
   and expects it to run to completion unattended.
-- `interactive` hands the terminal to a live harness session; a human
-  can watch/steer it, and the session's state (needs input, done, no
-  work) is derived from sentinel strings the harness is expected to
-  print.
+- `interactive` hands the terminal to a live harness session; a human can
+  watch/steer it, and the session's state (needs input, done, no work) is
+  derived from sentinel strings the harness is expected to print.
 
 Prompts may reference `{{VAR}}` tokens for any output variable set by an
 earlier step (e.g. `{{TASK_ID}}`).
 
-## When asked to draft a script step
+## Fixing a step that fails validation
 
-If you're asked to write the contents of a `run:` command for a script
-step (as opposed to editing this YAML file directly), you'll usually be
-told the loop's name, the step's name, and the steps already defined
-before it (so you know what environment variables/outputs are already
-available). Write a plain shell script that:
-
-1. Assumes the environment and `$LOOPER_OUTPUT` conventions above.
-2. Declares the outputs it produces (mention them back to the user so
-   they can add them to the step's `outputs:` list).
-3. Exits non-zero on real failure, `0` on success — don't swallow
-   errors just to avoid `on_fail` handling.
+If you're told a step currently fails validation (e.g. "interactive step
+requires 'prompt'"), fix that specific problem first, then ask the user
+if there's anything else they want changed about it.

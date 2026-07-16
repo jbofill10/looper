@@ -60,3 +60,18 @@ func BuildHeadless(h config.Harness, prompt string) ([]string, error) {
 	}
 	return argv, nil
 }
+
+// BuildStepAuthoring returns h.Interactive with "--plugin-dir", pluginDir,
+// and prompt appended, forming the argv for a step-authoring session
+// (see stepauthor.CreateStep/EditStep). Unlike BuildInteractive, no
+// --settings is involved: --plugin-dir alone activates a local plugin for
+// the session. It errors if h.Interactive is empty.
+func BuildStepAuthoring(h config.Harness, prompt, pluginDir string) ([]string, error) {
+	if len(h.Interactive) == 0 {
+		return nil, fmt.Errorf("harness has no interactive command configured")
+	}
+	argv := make([]string, len(h.Interactive), len(h.Interactive)+3)
+	copy(argv, h.Interactive)
+	argv = append(argv, "--plugin-dir", pluginDir, prompt)
+	return argv, nil
+}

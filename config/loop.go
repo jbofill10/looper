@@ -101,6 +101,34 @@ func knownType(t StepType) bool {
 	return false
 }
 
+// Validate checks s in isolation: name set, known type, required
+// type-specific fields, and a known on_fail value, defaulting OnFail to
+// OnFailAsk when blank. It does not check cross-step concerns like
+// duplicate names within a loop — see Loop.Validate for that.
+func (s *Step) Validate() error {
+	if s.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if !knownType(s.Type) {
+		return fmt.Errorf("unknown type %q", s.Type)
+	}
+	if s.Type == StepScript && s.Run == "" {
+		return fmt.Errorf("script step requires 'run'")
+	}
+	if (s.Type == StepInteractive || s.Type == StepHeadless) && s.Prompt == "" {
+		return fmt.Errorf("%s step requires 'prompt'", s.Type)
+	}
+	switch s.OnFail {
+	case "", OnFailAsk, OnFailRetry, OnFailAbort:
+	default:
+		return fmt.Errorf("invalid on_fail %q", s.OnFail)
+	}
+	if s.OnFail == "" {
+		s.OnFail = OnFailAsk
+	}
+	return nil
+}
+
 // Validate checks the loop for structural errors and fills in defaults.
 func (l *Loop) Validate() error {
 	if l.Name == "" {
@@ -121,30 +149,13 @@ func (l *Loop) Validate() error {
 	seen := map[string]bool{}
 	for i := range l.Steps {
 		s := &l.Steps[i]
-		if s.Name == "" {
-			return fmt.Errorf("step %d: name is required", i)
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("step %d: %w", i, err)
 		}
 		if seen[s.Name] {
 			return fmt.Errorf("duplicate step name %q", s.Name)
 		}
 		seen[s.Name] = true
-		if !knownType(s.Type) {
-			return fmt.Errorf("step %q: unknown type %q", s.Name, s.Type)
-		}
-		if s.Type == StepScript && s.Run == "" {
-			return fmt.Errorf("step %q: script step requires 'run'", s.Name)
-		}
-		if (s.Type == StepInteractive || s.Type == StepHeadless) && s.Prompt == "" {
-			return fmt.Errorf("step %q: %s step requires 'prompt'", s.Name, s.Type)
-		}
-		switch s.OnFail {
-		case "", OnFailAsk, OnFailRetry, OnFailAbort:
-		default:
-			return fmt.Errorf("step %q: invalid on_fail %q", s.Name, s.OnFail)
-		}
-		if s.OnFail == "" {
-			s.OnFail = OnFailAsk
-		}
 	}
 	return nil
 }

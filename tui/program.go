@@ -12,8 +12,8 @@ import (
 	"github.com/jbofill10/looper/builder"
 	"github.com/jbofill10/looper/client"
 	"github.com/jbofill10/looper/config"
-	"github.com/jbofill10/looper/draft"
 	"github.com/jbofill10/looper/rpc"
+	"github.com/jbofill10/looper/stepauthor"
 )
 
 // rpcTimeout bounds the ListRuns/RespondDecision RPCs issued by the program
@@ -38,11 +38,11 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 
 	var p *tea.Program
 	model := NewModel(Options{
-		RespondFn:    respondFn(ctx, cl),
-		AttachFn:     attachFn(ctx, cl, &p),
-		SaveLoopFn:   saveLoopFn(wd),
-		HarnessNames: global.HarnessNames(),
-		DraftFn:      draftFn(&p, global, wd),
+		RespondFn:     respondFn(ctx, cl),
+		AttachFn:      attachFn(ctx, cl, &p),
+		ProjectDir:    wd,
+		NewLoopPathFn: newLoopPathFn(wd),
+		AuthorFn:      authorFn(&p, global, wd),
 	})
 	p = tea.NewProgram(model)
 
@@ -69,51 +69,51 @@ func globalConfigPath() string {
 	return filepath.Join(home, ".config", "looper", "config.yaml")
 }
 
-// draftFn returns the Options.DraftFn implementation: it releases the
+// authorFn returns the Options.AuthorFn implementation: it releases the
 // Bubble Tea program's hold on the terminal (mirroring attachFn), runs a
-// draft session via the draft package using the global default harness,
-// and restores the program's terminal control on return. pp captures the
-// *tea.Program variable the same way attachFn does.
-func draftFn(pp **tea.Program, global *config.Global, wd string) func(builder.DraftRequest) tea.Cmd {
-	return func(req builder.DraftRequest) tea.Cmd {
+// create/edit-step session via the stepauthor package against the
+// "claude" harness, and restores the program's terminal control on
+// return. pp captures the *tea.Program variable the same way attachFn
+// does.
+func authorFn(pp **tea.Program, global *config.Global, wd string) func(builder.AuthorRequest) tea.Cmd {
+	return func(req builder.AuthorRequest) tea.Cmd {
 		return func() tea.Msg {
 			p := *pp
 			if p != nil {
 				if err := p.ReleaseTerminal(); err != nil {
-					return builder.DraftedMsg{Err: err}
+					return builder.SessionDoneMsg{Err: err}
 				}
 				defer p.RestoreTerminal()
 			}
 
-			h, err := global.ResolveHarness("")
+			h, err := global.ResolveHarness("claude")
 			if err != nil {
-				return builder.DraftedMsg{Err: err}
+				return builder.SessionDoneMsg{Err: err}
 			}
-			content, err := draft.Run(wd, h, draft.Request{
-				LoopName:   req.LoopName,
-				StepName:   req.StepName,
-				PriorSteps: req.PriorSteps,
-			})
-			if err != nil {
-				return builder.DraftedMsg{Err: err}
+
+			if req.StepName == "" {
+				err = stepauthor.CreateStep(req.ProjectDir, h, req.LoopPath)
+			} else {
+				err = stepauthor.EditStep(req.ProjectDir, h, req.LoopPath, req.StepName, req.ValidationErr)
 			}
-			return builder.DraftedMsg{Content: content}
+			return builder.SessionDoneMsg{Err: err}
 		}
 	}
 }
 
-// saveLoopFn returns the Options.SaveLoopFn implementation used by the
-// running fleet TUI: it saves loop to <dir>/.looper/loops/<name>.yaml via
-// config.SaveLoop, mirroring cli/build.go's buildAndSave (duplicated here
-// rather than shared, since cli already imports tui and importing the
-// other way would cycle).
-func saveLoopFn(dir string) func(loop *config.Loop) (string, error) {
-	return func(loop *config.Loop) (string, error) {
-		path := filepath.Join(dir, ".looper", "loops", loop.Name+".yaml")
-		if err := config.SaveLoop(loop, path); err != nil {
-			return "", err
+// newLoopPathFn returns an Options.NewLoopPathFn implementation that picks
+// an unused path under <wd>/.looper/loops/ each time it's called (new-1,
+// new-2, ... skipping any that already exist), for the fleet TUI's 'n'
+// (create loop) keybind.
+func newLoopPathFn(wd string) func() string {
+	return func() string {
+		dir := filepath.Join(wd, ".looper", "loops")
+		for i := 1; ; i++ {
+			path := filepath.Join(dir, fmt.Sprintf("new-%d.yaml", i))
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				return path
+			}
 		}
-		return path, nil
 	}
 }
 
