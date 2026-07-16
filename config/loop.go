@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +65,32 @@ func LoadLoop(path string) (*Loop, error) {
 		return nil, fmt.Errorf("invalid loop %q: %w", path, err)
 	}
 	return &l, nil
+}
+
+// SaveLoop validates l, then marshals it to YAML and writes it to path,
+// creating any missing parent directories. It re-validates before writing
+// so it never produces a loop file that fails config.Loop.Validate(); on a
+// validation error nothing is written.
+//
+// Note: gopkg.in/yaml.v3 renders a block scalar for a multi-line string,
+// but a leading newline in that string becomes a literal blank first line
+// when re-parsed inconsistently across yaml.v3 versions. Callers must not
+// prefix multi-line Run/Prompt values with a leading newline.
+func SaveLoop(l *Loop, path string) error {
+	if err := l.Validate(); err != nil {
+		return fmt.Errorf("invalid loop: %w", err)
+	}
+	data, err := yaml.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("marshal loop: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create loop directory: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write loop file: %w", err)
+	}
+	return nil
 }
 
 func knownType(t StepType) bool {
