@@ -603,3 +603,35 @@ func TestWorker_ResumeDir_ConsumedAfterFirstIteration(t *testing.T) {
 		t.Errorf("expected a fresh iter-2 run dir for the second iteration: %v", err)
 	}
 }
+
+func TestWorker_GracefulStopEndsAfterCurrentIteration(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:  "l",
+		Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	graceful := make(chan struct{})
+	var iterations []int
+
+	w := &Worker{
+		Loop:         loop,
+		BaseDir:      filepath.Join(dir, ".looper"),
+		Workdir:      dir,
+		GracefulStop: graceful,
+		OnReport: func(r Report) {
+			if r.Kind == ReportIteration {
+				iterations = append(iterations, r.Iteration)
+				if r.Iteration == 1 {
+					close(graceful)
+				}
+			}
+		},
+	}
+
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(iterations) != 1 || iterations[0] != 1 {
+		t.Errorf("iterations reported = %v, want [1] (graceful stop must not prevent iteration 1 from running, but must prevent iteration 2)", iterations)
+	}
+}
