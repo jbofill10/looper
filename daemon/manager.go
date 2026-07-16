@@ -66,12 +66,21 @@ func (s *subscriber) close() {
 	close(s.ch)
 }
 
+// pendingRequest is an in-flight decision request awaiting Respond. update
+// is retained so a subscriber that joins after the request was published
+// (and thus missed it) can still be shown it — decision_request delivery
+// must be reliable, since the worker blocks on it indefinitely.
+type pendingRequest struct {
+	outcome chan runner.Outcome
+	update  Update
+}
+
 // runEntry tracks one active or finished run.
 type runEntry struct {
 	info    RunInfo
 	cancel  context.CancelFunc
 	fanIn   chan Update // internal buffer; drained by a per-run fanout goroutine
-	pending map[string]chan runner.Outcome
+	pending map[string]*pendingRequest
 }
 
 // Manager owns the daemon's active and finished runs. It is pure Go with no
@@ -153,7 +162,7 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string) (string
 		info:    RunInfo{RunID: runID, LoopName: loop.Name, Status: "running"},
 		cancel:  cancel,
 		fanIn:   make(chan Update, 256),
-		pending: map[string]chan runner.Outcome{},
+		pending: map[string]*pendingRequest{},
 	}
 	m.runs[runID] = re
 	m.mu.Unlock()
@@ -252,9 +261,13 @@ func (m *Manager) Subscribe(runID string) (<-chan Update, func()) {
 	m.subs[id] = sub
 
 	var snapshot []RunInfo
+	var pendingUpdates []Update
 	for rid, re := range m.runs {
 		if runID == "" || rid == runID {
 			snapshot = append(snapshot, re.info)
+			for _, p := range re.pending {
+				pendingUpdates = append(pendingUpdates, p.update)
+			}
 		}
 	}
 	m.mu.Unlock()
@@ -265,6 +278,12 @@ func (m *Manager) Subscribe(runID string) (<-chan Update, func()) {
 			Iteration: info.Iteration, Step: info.CurrentStep,
 			State: info.State, Message: info.Err,
 		})
+	}
+	// Replay any still-unanswered decision requests: a subscriber that
+	// joins after one was published (and thus missed it on the fan-out)
+	// must still see it, since the worker is blocked indefinitely on it.
+	for _, u := range pendingUpdates {
+		sub.send(u)
 	}
 
 	unsub := func() {
@@ -292,7 +311,7 @@ func (m *Manager) Respond(runID, requestID, outcome string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("no such run %q", runID)
 	}
-	ch, ok := re.pending[requestID]
+	pr, ok := re.pending[requestID]
 	if ok {
 		delete(re.pending, requestID)
 	}
@@ -301,7 +320,7 @@ func (m *Manager) Respond(runID, requestID, outcome string) error {
 	if !ok {
 		return fmt.Errorf("no pending request %q for run %q", requestID, runID)
 	}
-	ch <- oc // buffered cap 1; never blocks
+	pr.outcome <- oc // buffered cap 1; never blocks
 	return nil
 }
 
@@ -415,14 +434,14 @@ func (p *remotePrompter) ask(step config.Step) (runner.Outcome, error) {
 		m.mu.Unlock()
 		return runner.OutcomeAbort, fmt.Errorf("no such run %q", p.runID)
 	}
-	re.pending[reqID] = outcomeCh
-	loopName := re.info.LoopName
+	update := Update{
+		RunID: p.runID, Kind: "decision_request", LoopName: re.info.LoopName,
+		Step: step.Name, RequestID: reqID, Options: []string{"advance", "retry", "abort"},
+	}
+	re.pending[reqID] = &pendingRequest{outcome: outcomeCh, update: update}
 	m.mu.Unlock()
 
-	m.publish(Update{
-		RunID: p.runID, Kind: "decision_request", LoopName: loopName,
-		Step: step.Name, RequestID: reqID, Options: []string{"advance", "retry", "abort"},
-	})
+	m.publish(update)
 
 	select {
 	case oc := <-outcomeCh:

@@ -20,12 +20,19 @@ const Version = "0.1.0-dev"
 type Server struct {
 	rpc.UnimplementedLooperServer
 
+	manager    *Manager
 	grpcServer atomic.Pointer[grpc.Server]
 }
 
-// New returns a new, unstarted Server.
+// New returns a new, unstarted Server backed by a fresh Manager. The
+// Manager's looperBin is os.Executable(), falling back to "looper" if that
+// cannot be determined.
 func New() *Server {
-	return &Server{}
+	looperBin, err := os.Executable()
+	if err != nil {
+		looperBin = "looper"
+	}
+	return &Server{manager: NewManager(nil, looperBin)}
 }
 
 // Ping reports the daemon's version.
