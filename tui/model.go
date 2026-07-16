@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jbofill10/looper/builder"
-	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/style"
 )
 
@@ -113,17 +112,18 @@ type Options struct {
 	// session. It returns a tea.Cmd that suspends the Bubble Tea program,
 	// bridges the session, and resumes it on return.
 	AttachFn func(runID string) tea.Cmd
-	// SaveLoopFn persists a completed guided-builder loop and returns the
-	// path written. Invoked when the embedded builder (viewBuilder) reaches
-	// its done stage.
-	SaveLoopFn func(loop *config.Loop) (string, error)
-	// HarnessNames lists the configured harnesses, offered as the guided
-	// builder's per-step harness select field.
-	HarnessNames []string
-	// DraftFn, if set, is passed through to each builder.Model the guided
-	// builder constructs, letting it launch an interactive harness session
-	// to draft a script step's contents (see builder.Options.DraftFn).
-	DraftFn func(builder.DraftRequest) tea.Cmd
+	// ProjectDir is the project directory passed to builder.New when
+	// entering the builder view (the 'n' key).
+	ProjectDir string
+	// NewLoopPathFn, if set, returns a fresh loop path (e.g.
+	// .looper/loops/new-<n>.yaml) each time the 'n' key constructs a new
+	// builder.Model.
+	NewLoopPathFn func() string
+	// AuthorFn, if set, is passed through to each builder.Model the
+	// embedded builder constructs, letting it launch an interactive
+	// claude session to create or edit a step (see
+	// builder.Options.AuthorFn).
+	AuthorFn func(builder.AuthorRequest) tea.Cmd
 	// Quit, if set, makes Init immediately emit tea.Quit — used by tests
 	// and tools that want a Model that never blocks on a real program run.
 	Quit bool
@@ -187,7 +187,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleBuilderKey(msg)
 		}
 		return m.handleKey(msg)
-	case builder.DraftedMsg:
+	case builder.SessionDoneMsg:
 		if m.view == viewBuilder {
 			next, cmd := m.builder.Update(msg)
 			m.builder = next.(builder.Model)
@@ -234,8 +234,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.view = viewFleet
 	case "n":
-		if m.view == viewFleet {
-			m.builder = builder.New(nil, m.opts.HarnessNames, builder.Options{DraftFn: m.opts.DraftFn})
+		if m.view == viewFleet && m.opts.NewLoopPathFn != nil {
+			loopPath := m.opts.NewLoopPathFn()
+			b, err := builder.New(m.opts.ProjectDir, loopPath, builder.Options{AuthorFn: m.opts.AuthorFn})
+			if err != nil {
+				m.builderMsg = fmt.Sprintf("error: %v", err)
+				return m, nil
+			}
+			m.builder = b
 			m.builderMsg = ""
 			m.view = viewBuilder
 		}
@@ -303,28 +309,14 @@ func (m Model) handleBuilderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	next, cmd := m.builder.Update(msg)
 	m.builder = next.(builder.Model)
 
-	if m.builder.Done() {
-		loop, _ := m.builder.Loop()
-		m.builderMsg = m.saveLoop(loop)
+	if m.builder.Quit() {
+		m.builderMsg = fmt.Sprintf("saved %s", m.builder.Path())
 		m.builder = builder.Model{}
 		m.view = viewFleet
 		return m, nil
 	}
 
 	return m, cmd
-}
-
-// saveLoop persists loop via Options.SaveLoopFn and formats the outcome
-// for display in the fleet view's builderMsg line.
-func (m Model) saveLoop(loop *config.Loop) string {
-	if m.opts.SaveLoopFn == nil {
-		return ""
-	}
-	path, err := m.opts.SaveLoopFn(loop)
-	if err != nil {
-		return fmt.Sprintf("error: %v", err)
-	}
-	return fmt.Sprintf("saved %s", path)
 }
 
 // focusedRow returns the worker row currently focused, and whether one is

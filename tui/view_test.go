@@ -1,12 +1,13 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/builder"
 )
 
 // key builds a synthetic tea.KeyMsg for the given single-character or named
@@ -206,25 +207,19 @@ func TestView_QuitKeys(t *testing.T) {
 	}
 }
 
-// typeRunes feeds each character of s to m as individual key presses,
-// simulating a user typing s into the current builder field.
-func typeRunes(t *testing.T, m Model, s string) Model {
-	t.Helper()
-	for _, r := range s {
-		m, _ = press(t, m, string(r))
-	}
-	return m
-}
-
 func TestView_NewLoopKeyEntersBuilder(t *testing.T) {
-	m := twoWorkerModel()
+	dir := t.TempDir()
+	m := NewModel(Options{
+		ProjectDir:    dir,
+		NewLoopPathFn: func() string { return filepath.Join(dir, ".looper", "loops", "new-1.yaml") },
+	})
 	m, _ = press(t, m, "n")
 	if m.view != viewBuilder {
 		t.Fatalf("view = %v, want viewBuilder", m.view)
 	}
 	out := m.View()
-	if !strings.Contains(out, "Loop name:") {
-		t.Fatalf("builder view missing prompt:\n%s", out)
+	if !strings.Contains(out, "Loop:") {
+		t.Fatalf("builder view missing loop title:\n%s", out)
 	}
 	if !strings.Contains(out, "[esc] cancel") {
 		t.Fatalf("builder view missing cancel hint:\n%s", out)
@@ -233,26 +228,32 @@ func TestView_NewLoopKeyEntersBuilder(t *testing.T) {
 
 func TestView_EscCancelsBuilderWithoutSaving(t *testing.T) {
 	called := false
+	dir := t.TempDir()
 	m := NewModel(Options{
-		SaveLoopFn: func(loop *config.Loop) (string, error) {
+		ProjectDir:    dir,
+		NewLoopPathFn: func() string { return filepath.Join(dir, ".looper", "loops", "new-1.yaml") },
+		AuthorFn: func(req builder.AuthorRequest) tea.Cmd {
 			called = true
-			return "unused", nil
+			return func() tea.Msg { return builder.SessionDoneMsg{} }
 		},
 	})
 	m, _ = press(t, m, "n")
-	m = typeRunes(t, m, "abandoned")
 	m, _ = press(t, m, "esc")
 
 	if m.view != viewFleet {
 		t.Fatalf("view = %v, want viewFleet after esc", m.view)
 	}
 	if called {
-		t.Fatalf("SaveLoopFn was called despite cancelling with esc")
+		t.Fatalf("AuthorFn was called despite cancelling with esc")
 	}
 }
 
 func TestView_CtrlCQuitsFromBuilder(t *testing.T) {
-	m := NewModel(Options{})
+	dir := t.TempDir()
+	m := NewModel(Options{
+		ProjectDir:    dir,
+		NewLoopPathFn: func() string { return filepath.Join(dir, ".looper", "loops", "new-1.yaml") },
+	})
 	m, _ = press(t, m, "n")
 	_, cmd := press(t, m, "ctrl+c")
 	if cmd == nil {
@@ -261,45 +262,22 @@ func TestView_CtrlCQuitsFromBuilder(t *testing.T) {
 }
 
 func TestView_CompletingBuilderSavesAndReturnsToFleet(t *testing.T) {
-	var savedLoop *config.Loop
+	dir := t.TempDir()
+	loopPath := filepath.Join(dir, ".looper", "loops", "dev-loop.yaml")
 	m := NewModel(Options{
-		SaveLoopFn: func(loop *config.Loop) (string, error) {
-			savedLoop = loop
-			return "/tmp/.looper/loops/" + loop.Name + ".yaml", nil
-		},
+		ProjectDir:    dir,
+		NewLoopPathFn: func() string { return loopPath },
 	})
 
-	m, _ = press(t, m, "n") // enter builder
-
-	m = typeRunes(t, m, "dev-loop") // loop name
-	m, _ = press(t, m, "tab")       // -> concurrency (left blank)
-	m, _ = press(t, m, "tab")       // -> step name
-
-	m = typeRunes(t, m, "get-task")
-	m, _ = press(t, m, "tab") // -> step type (defaults to script)
-	m, _ = press(t, m, "right")
-	m, _ = press(t, m, "right")
-	m, _ = press(t, m, "right") // script -> headless -> interactive -> manual
-	m, _ = press(t, m, "tab")   // -> outputs (left blank)
-	m, _ = press(t, m, "tab")   // -> add step
-	m, _ = press(t, m, "enter")
-
-	// After adding, focus resets to step name and step type defaults back
-	// to script, so its full field list is visible again en route to
-	// finish.
-	for i := 0; i < 7; i++ {
-		m, _ = press(t, m, "tab")
-	}
-	m, _ = press(t, m, "enter") // finish
+	m, _ = press(t, m, "n") // enter builder; writes a skeleton loop to loopPath
+	m, _ = press(t, m, "q") // quit -> builder.Model.Quit() becomes true
 
 	if m.view != viewFleet {
-		t.Fatalf("view = %v, want viewFleet after builder completes", m.view)
+		t.Fatalf("view = %v, want viewFleet after quitting the builder", m.view)
 	}
-	if savedLoop == nil || savedLoop.Name != "dev-loop" {
-		t.Fatalf("SaveLoopFn called with %+v, want loop named dev-loop", savedLoop)
-	}
-	if !strings.Contains(m.View(), "saved /tmp/.looper/loops/dev-loop.yaml") {
-		t.Fatalf("fleet view missing save confirmation:\n%s", m.View())
+	want := "saved " + loopPath
+	if !strings.Contains(m.View(), want) {
+		t.Fatalf("fleet view missing save confirmation %q:\n%s", want, m.View())
 	}
 }
 
