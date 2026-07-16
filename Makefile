@@ -9,6 +9,7 @@ build:
 install: build
 	mkdir -p $(INSTALL_DIR)
 	cp $(BINARY) $(INSTALL_DIR)/$(BINARY)
+	@$(INSTALL_DIR)/$(BINARY) shutdown >/dev/null 2>&1 || true
 
 test:
 	go test ./...
