@@ -40,6 +40,14 @@ type Worker struct {
 	HarnessName string         // default harness name; falls back to Global.DefaultHarness
 	LooperBin   string         // absolute path to the looper binary, used by interactive steps for hook wiring
 
+	// InteractiveRun, if set, replaces the default local-pty run
+	// implementation (runPTY) for interactive steps. The daemon injects an
+	// implementation that starts a pty.Session and registers it on the run
+	// for remote attach, instead of auto-attaching to the daemon's own
+	// stdio. A nil value preserves the local `looper run` behavior
+	// unchanged.
+	InteractiveRun func(argv, env []string, socketPath string) error
+
 	// OnReport, if non-nil, is called synchronously as the worker makes
 	// progress: at the start of each iteration, at each step start, after
 	// each step outcome, and once when the run loop ends.
@@ -176,7 +184,7 @@ func (w *Worker) executorFor(step config.Step) (Executor, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &InteractiveExecutor{Harness: h, Prompter: w.Prompter, LooperBin: w.LooperBin}, nil
+		return &InteractiveExecutor{Harness: h, Prompter: w.Prompter, LooperBin: w.LooperBin, run: w.InteractiveRun}, nil
 	default:
 		return nil, fmt.Errorf("step %q: unknown type %q", step.Name, step.Type)
 	}

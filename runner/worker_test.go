@@ -174,6 +174,43 @@ func TestWorker_ExecutorForInteractive(t *testing.T) {
 	}
 }
 
+func TestWorker_ExecutorForInteractiveUsesInjectedRun(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "plan", Type: config.StepInteractive, Prompt: "hi"}},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{InteractiveOutcome: OutcomeAdvance})
+
+	ranCh := make(chan struct{}, 1)
+	w.InteractiveRun = func(argv, env []string, socketPath string) error {
+		ranCh <- struct{}{}
+		return nil
+	}
+
+	exec, err := w.executorFor(loop.Steps[0])
+	if err != nil {
+		t.Fatalf("executorFor: %v", err)
+	}
+	ie, ok := exec.(*InteractiveExecutor)
+	if !ok {
+		t.Fatalf("executorFor returned %T, want *InteractiveExecutor", exec)
+	}
+	if ie.run == nil {
+		t.Fatalf("expected ie.run to be set from Worker.InteractiveRun")
+	}
+
+	if _, err := ie.Run(newRC(t), loop.Steps[0]); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	select {
+	case <-ranCh:
+	default:
+		t.Errorf("injected InteractiveRun was not invoked")
+	}
+}
+
 func TestWorker_OnReportRecordsSequence(t *testing.T) {
 	loop := &config.Loop{
 		Name:          "l",
