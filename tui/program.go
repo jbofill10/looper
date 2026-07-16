@@ -289,7 +289,9 @@ func loopsSnapshotFromProto(loops []*rpc.LoopInfo) LoopsSnapshotMsg {
 	return out
 }
 
-// listLoopsFn returns the Options.ListLoopsFn implementation.
+// listLoopsFn returns a command factory that fetches the current
+// Loops-catalog snapshot; used by pollLoopsSnapshot and by each mutating
+// action helper to refresh the view immediately after its RPC succeeds.
 func listLoopsFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func() tea.Cmd {
 	return func() tea.Cmd {
 		return func() tea.Msg {
