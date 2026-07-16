@@ -42,10 +42,13 @@ just looper's. That's no longer good enough: we want the skill available
 only when looper itself launches the session.
 
 Claude Code has no settings field for pointing at an arbitrary skill
-directory, but it does support enabling a *plugin* per-invocation:
-`--settings <path>` (already used for scratch settings files elsewhere in
-this codebase) can set `enabledPlugins`, and `--plugin-dir <path>` loads a
-plugin from an arbitrary directory for that one session.
+directory, but `--plugin-dir <path>` loads a local plugin directory for
+that one session only — it activates without being installed or listed
+in any settings file, so nothing needs to touch `enabledPlugins` (that
+field is for already-installed marketplace plugins, a different
+mechanism). A plugin directory's `.claude-plugin/plugin.json` needs only
+a `name` field; a `skills/<name>/SKILL.md` beneath it is auto-discovered
+without being listed anywhere.
 
 So the bundled skill becomes a small plugin instead of a bare skill file:
 
@@ -54,15 +57,13 @@ So the bundled skill becomes a small plugin instead of a bare skill file:
   `go:embed` (replacing today's `skill.go`/`skills/loop-creation/`).
 - `harness.EnsureStepAuthoringPlugin() (dir string, err error)` extracts
   the embedded plugin tree to a looper-owned directory outside the user's
-  project (e.g. `$XDG_CACHE_HOME/looper/plugin/` or `os.UserCacheDir()`
-  equivalent), refreshing it every call the same way the current function
-  always overwrites — it's looper-managed, not user-owned.
-- Before starting a session, looper writes a scratch `settings.json`
-  containing `{"enabledPlugins": {"step-authoring": true}}` (same scratch
-  file lifecycle as today's scratch script file: created under
-  `<projectDir>/.looper/tmp/`, removed after the session) and passes
-  `--plugin-dir <dir> --settings <scratchSettingsPath>` on the harness
-  argv, in addition to the existing prompt argument.
+  project (e.g. `os.UserCacheDir()`-rooted), refreshing it every call the
+  same way the current function always overwrites — it's looper-managed,
+  not user-owned.
+- Before starting a session, looper resolves that directory and passes
+  `--plugin-dir <dir>` on the harness argv, in addition to the existing
+  prompt argument. No scratch settings file is needed for this (unlike
+  `InteractiveExecutor`'s hook settings, which is an unrelated mechanism).
 - The skill content itself documents: the four step types and which
   fields each requires, `outputs`/`on_fail`/`harness` semantics, the
   script step's `$LOOPER_OUTPUT` contract, and 2-3 worked examples drawn
@@ -105,7 +106,11 @@ On detach, the builder reloads the file (§2) and re-validates.
 
 This supersedes `draft.Run`/`draft.Request`/`DraftedMsg` and the
 `Options.DraftFn` hook entirely — there's no drafted-text-to-paste-back
-round trip anymore, since Claude edits the file directly.
+round trip anymore, since Claude edits the file directly. The `draft`
+package is renamed `stepauthor` to reflect the new responsibility
+(`CreateStep`/`EditStep` instead of `Run`), and always resolves the
+`"claude"` harness directly rather than taking a configurable harness
+name, per the "start with claude for now" scope.
 
 ### 4. Per-step validation and red/invalid display
 
