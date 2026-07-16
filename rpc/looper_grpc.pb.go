@@ -26,6 +26,7 @@ const (
 	Looper_ListRuns_FullMethodName        = "/looper.v1.Looper/ListRuns"
 	Looper_StreamState_FullMethodName     = "/looper.v1.Looper/StreamState"
 	Looper_RespondDecision_FullMethodName = "/looper.v1.Looper/RespondDecision"
+	Looper_Attach_FullMethodName          = "/looper.v1.Looper/Attach"
 )
 
 // LooperClient is the client API for Looper service.
@@ -48,6 +49,10 @@ type LooperClient interface {
 	StreamState(ctx context.Context, in *StreamStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StateUpdate], error)
 	// RespondDecision answers a pending decision request (manual step, failure).
 	RespondDecision(ctx context.Context, in *RespondDecisionRequest, opts ...grpc.CallOption) (*RespondDecisionResponse, error)
+	// Attach opens a bidirectional stream to a run's live interactive session:
+	// the client sends stdin bytes and resize events; the server streams the
+	// session's terminal output.
+	Attach(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AttachInput, AttachOutput], error)
 }
 
 type looperClient struct {
@@ -137,6 +142,19 @@ func (c *looperClient) RespondDecision(ctx context.Context, in *RespondDecisionR
 	return out, nil
 }
 
+func (c *looperClient) Attach(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AttachInput, AttachOutput], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Looper_ServiceDesc.Streams[1], Looper_Attach_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AttachInput, AttachOutput]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Looper_AttachClient = grpc.BidiStreamingClient[AttachInput, AttachOutput]
+
 // LooperServer is the server API for Looper service.
 // All implementations must embed UnimplementedLooperServer
 // for forward compatibility.
@@ -157,6 +175,10 @@ type LooperServer interface {
 	StreamState(*StreamStateRequest, grpc.ServerStreamingServer[StateUpdate]) error
 	// RespondDecision answers a pending decision request (manual step, failure).
 	RespondDecision(context.Context, *RespondDecisionRequest) (*RespondDecisionResponse, error)
+	// Attach opens a bidirectional stream to a run's live interactive session:
+	// the client sends stdin bytes and resize events; the server streams the
+	// session's terminal output.
+	Attach(grpc.BidiStreamingServer[AttachInput, AttachOutput]) error
 	mustEmbedUnimplementedLooperServer()
 }
 
@@ -187,6 +209,9 @@ func (UnimplementedLooperServer) StreamState(*StreamStateRequest, grpc.ServerStr
 }
 func (UnimplementedLooperServer) RespondDecision(context.Context, *RespondDecisionRequest) (*RespondDecisionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RespondDecision not implemented")
+}
+func (UnimplementedLooperServer) Attach(grpc.BidiStreamingServer[AttachInput, AttachOutput]) error {
+	return status.Error(codes.Unimplemented, "method Attach not implemented")
 }
 func (UnimplementedLooperServer) mustEmbedUnimplementedLooperServer() {}
 func (UnimplementedLooperServer) testEmbeddedByValue()                {}
@@ -328,6 +353,13 @@ func _Looper_RespondDecision_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Looper_Attach_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(LooperServer).Attach(&grpc.GenericServerStream[AttachInput, AttachOutput]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Looper_AttachServer = grpc.BidiStreamingServer[AttachInput, AttachOutput]
+
 // Looper_ServiceDesc is the grpc.ServiceDesc for Looper service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -365,6 +397,12 @@ var Looper_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamState",
 			Handler:       _Looper_StreamState_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "Attach",
+			Handler:       _Looper_Attach_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/looper.proto",
