@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -355,5 +356,39 @@ func TestView_GracefulAndHardStopKeysOnlyActWithAnActiveRun(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	if !gracefulCalled {
 		t.Errorf("'g' on a running loop must call StopLoopGracefulFn")
+	}
+}
+
+func TestView_ExpandedLoopForwardsCreateStepKeyToEmbeddedBuilder(t *testing.T) {
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	loopPath := filepath.Join(loopsDir, "a.yaml")
+	if err := os.WriteFile(loopPath, []byte("name: a\nsteps: []\n"), 0o644); err != nil {
+		t.Fatalf("write loop: %v", err)
+	}
+
+	var authorReq builder.AuthorRequest
+	m := NewModel(Options{
+		ProjectDir: dir,
+		AuthorFn: func(req builder.AuthorRequest) tea.Cmd {
+			authorReq = req
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", Path: loopPath, Steps: nil}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus the Loops tree
+	m = next.(Model)
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace}) // expand
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")}) // create-step
+	m = next.(Model)
+
+	if authorReq.LoopPath != loopPath {
+		t.Errorf("AuthorFn called with LoopPath %q, want %q (create-step key must forward to the expanded loop's embedded builder)", authorReq.LoopPath, loopPath)
 	}
 }

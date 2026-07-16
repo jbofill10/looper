@@ -195,6 +195,8 @@ type Model struct {
 	renamingLoop string // "" = not renaming; else the loop name being renamed
 	renameInput  string
 	deletingLoop string // "" = no delete confirmation pending; else the loop name
+
+	loopBuilders map[string]builder.Model // lazily populated, one per loop ever expanded
 }
 
 // treeRow is one row of the Loops section's tree: either a loop header row
@@ -208,9 +210,30 @@ type treeRow struct {
 // NewModel returns a Model configured with opts.
 func NewModel(opts Options) Model {
 	return Model{
-		opts:    opts,
-		workers: map[workerKey]workerRow{},
+		opts:         opts,
+		workers:      map[workerKey]workerRow{},
+		loopBuilders: map[string]builder.Model{},
 	}
+}
+
+// loopBuilder returns the builder.Model backing loopName's inline step
+// list, constructing it (via builder.New, against that loop's own file —
+// see LoopSnapshot.Path) the first time it's needed, and caching it so
+// cursor/authoring state survives collapsing and re-expanding the loop.
+func (m *Model) loopBuilder(loopName string) (builder.Model, bool) {
+	if b, ok := m.loopBuilders[loopName]; ok {
+		return b, true
+	}
+	loop, ok := m.loopByName(loopName)
+	if !ok {
+		return builder.Model{}, false
+	}
+	b, err := builder.New(m.opts.ProjectDir, loop.Path, builder.Options{AuthorFn: m.opts.AuthorFn})
+	if err != nil {
+		return builder.Model{}, false
+	}
+	m.loopBuilders[loopName] = b
+	return b, true
 }
 
 // Init implements tea.Model. It emits tea.Quit immediately if
@@ -256,6 +279,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			next, cmd := m.builder.Update(msg)
 			m.builder = next.(builder.Model)
 			return m, cmd
+		}
+		if m.expandedLoop != "" {
+			if b, ok := m.loopBuilders[m.expandedLoop]; ok {
+				next, cmd := b.Update(msg)
+				m.loopBuilders[m.expandedLoop] = next.(builder.Model)
+				return m, cmd
+			}
 		}
 		return m, nil
 	}
@@ -364,6 +394,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.view == viewFleet && m.loopsFocused {
 			return m.handleLoopRowKey(msg.String())
 		}
+	case "c", "e", "d", "shift+up", "shift+down":
+		if m.view == viewFleet && m.loopsFocused && m.expandedLoop != "" {
+			return m.handleExpandedLoopStepKey(msg)
+		}
 	}
 	return m, nil
 }
@@ -441,6 +475,30 @@ func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
 		m.deletingLoop = loop.Name
 	}
 	return m, nil
+}
+
+// handleExpandedLoopStepKey forwards a step-list key (c/e/d/shift+up/
+// shift+down) to the expanded loop's embedded builder.Model, positioning
+// that builder's own cursor at the tree's currently-selected step row
+// first (if the cursor is on a step row of this loop) so the forwarded
+// key acts on the right step.
+func (m Model) handleExpandedLoopStepKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b, ok := m.loopBuilder(m.expandedLoop)
+	if !ok {
+		return m, nil
+	}
+
+	rows := m.treeRows()
+	if m.treeCursor < len(rows) {
+		row := rows[m.treeCursor]
+		if row.Kind == "step" && row.LoopName == m.expandedLoop {
+			b = b.WithCursor(row.StepIndex)
+		}
+	}
+
+	next, cmd := b.Update(key)
+	m.loopBuilders[m.expandedLoop] = next.(builder.Model)
+	return m, cmd
 }
 
 // handleRenameKey handles the rename-loop input stage entered via R:
@@ -602,8 +660,16 @@ func (m Model) viewFleet() string {
 				}
 				fmt.Fprintf(&b, "%s%-20s %s%s\n", cursor, loop.Name, status, running)
 			} else {
-				loop, _ := m.loopByName(r.LoopName)
-				fmt.Fprintf(&b, "%s    %d. %s\n", cursor, r.StepIndex+1, loop.Steps[r.StepIndex])
+				stepName := ""
+				if l, ok := m.loopByName(r.LoopName); ok && r.StepIndex < len(l.Steps) {
+					stepName = l.Steps[r.StepIndex]
+				}
+				if bm, ok := m.loopBuilders[r.LoopName]; ok {
+					if steps := bm.Steps(); r.StepIndex < len(steps) {
+						stepName = fmt.Sprintf("%s (%s)", steps[r.StepIndex].Name, steps[r.StepIndex].Type)
+					}
+				}
+				fmt.Fprintf(&b, "%s    %d. %s\n", cursor, r.StepIndex+1, stepName)
 			}
 		}
 		b.WriteString("\n")
@@ -782,7 +848,11 @@ func (m Model) treeRows() []treeRow {
 	for _, l := range m.loops {
 		rows = append(rows, treeRow{Kind: "loop", LoopName: l.Name})
 		if l.Name == m.expandedLoop {
-			for i := range l.Steps {
+			n := len(l.Steps)
+			if b, ok := m.loopBuilders[l.Name]; ok {
+				n = len(b.Steps())
+			}
+			for i := 0; i < n; i++ {
 				rows = append(rows, treeRow{Kind: "step", LoopName: l.Name, StepIndex: i})
 			}
 		}

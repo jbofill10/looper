@@ -209,6 +209,24 @@ func (m *Model) revalidate() {
 	m.stepErrors = errs
 }
 
+// WithCursor returns m with its cursor set to i, clamped to a valid step
+// index. Used by embedders (e.g. the fleet TUI's inline step list) that
+// track their own selection and need the builder's next c/e/d/reorder key
+// to act on that same step.
+func (m Model) WithCursor(i int) Model {
+	if i < 0 {
+		i = 0
+	}
+	if max := len(m.loop.Steps) - 1; i > max {
+		i = max
+	}
+	if i < 0 {
+		i = 0
+	}
+	m.cursor = i
+	return m
+}
+
 // Init implements tea.Model. The builder has no initial command.
 func (m Model) Init() tea.Cmd {
 	return nil
