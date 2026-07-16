@@ -63,6 +63,22 @@ type RunSnapshot struct {
 // catches up.
 type RunsSnapshotMsg []RunSnapshot
 
+// LoopSnapshot is a point-in-time view of one configured loop, as returned
+// by the daemon's ListLoops RPC.
+type LoopSnapshot struct {
+	Name    string
+	Path    string
+	Enabled bool
+	Steps   []string
+	RunID   string
+}
+
+// LoopsSnapshotMsg carries the current Loops-catalog snapshot, sent
+// periodically by the program wiring (see tui.Run) so the Loops section
+// stays in sync with daemon-side enable/run-once/rename/delete actions
+// taken from other clients.
+type LoopsSnapshotMsg []LoopSnapshot
+
 // ErrMsg reports an error encountered by the program wiring (e.g. a stream
 // or RPC failure) so the Model can surface it.
 type ErrMsg struct{ Err error }
@@ -124,6 +140,19 @@ type Options struct {
 	// claude session to create or edit a step (see
 	// builder.Options.AuthorFn).
 	AuthorFn func(builder.AuthorRequest) tea.Cmd
+	// ListLoopsFn, if set, fetches the current Loops-catalog snapshot. It
+	// returns a tea.Cmd yielding a LoopsSnapshotMsg or ErrMsg.
+	ListLoopsFn func() tea.Cmd
+	// SetLoopEnabledFn toggles a loop's enabled state.
+	SetLoopEnabledFn func(loopName string, enabled bool) tea.Cmd
+	// RunLoopOnceFn starts a loop as a one-off run.
+	RunLoopOnceFn func(loopName string) tea.Cmd
+	// StopLoopGracefulFn lets a run finish its current iteration, then stops it.
+	StopLoopGracefulFn func(runID string) tea.Cmd
+	// RenameLoopFn renames a loop.
+	RenameLoopFn func(loopName, newName string) tea.Cmd
+	// DeleteLoopFn deletes a loop.
+	DeleteLoopFn func(loopName string) tea.Cmd
 	// Quit, if set, makes Init immediately emit tea.Quit — used by tests
 	// and tools that want a Model that never blocks on a real program run.
 	Quit bool

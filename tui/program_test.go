@@ -42,3 +42,14 @@ func TestUpdateFromProto(t *testing.T) {
 		t.Fatalf("updateFromProto = %+v, want %+v", got, want)
 	}
 }
+
+func TestLoopsSnapshotFromProto(t *testing.T) {
+	resp := []*rpc.LoopInfo{
+		{Name: "a", Path: "/x/a.yaml", Enabled: true, Steps: []string{"s1", "s2"}, RunId: "run-001"},
+	}
+	got := loopsSnapshotFromProto(resp)
+	want := LoopsSnapshotMsg{{Name: "a", Path: "/x/a.yaml", Enabled: true, Steps: []string{"s1", "s2"}, RunID: "run-001"}}
+	if len(got) != 1 || !reflect.DeepEqual(got[0], want[0]) {
+		t.Errorf("loopsSnapshotFromProto = %+v, want %+v", got, want)
+	}
+}

@@ -20,6 +20,11 @@ import (
 // wiring (StreamState and Attach are long-lived and unbounded).
 const rpcTimeout = 5 * time.Second
 
+// loopsTickInterval bounds how often the program wiring re-fetches the
+// Loops-catalog snapshot: there is no push stream for it (unlike
+// StreamState for runs), so it's polled.
+const loopsTickInterval = 2 * time.Second
+
 // Run builds a Model wired to cl's RPCs and runs it as a Bubble Tea
 // program until the user quits or ctx is cancelled. It primes the Model
 // with a ListRuns snapshot, forwards cl's StreamState updates to the
@@ -36,18 +41,26 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 		return fmt.Errorf("loading global config: %w", err)
 	}
 
+	baseDir := filepath.Join(wd, ".looper")
 	var p *tea.Program
 	model := NewModel(Options{
-		RespondFn:     respondFn(ctx, cl),
-		AttachFn:      attachFn(ctx, cl, &p),
-		ProjectDir:    wd,
-		NewLoopPathFn: newLoopPathFn(wd),
-		AuthorFn:      authorFn(&p, global, wd),
+		RespondFn:          respondFn(ctx, cl),
+		AttachFn:           attachFn(ctx, cl, &p),
+		ProjectDir:         wd,
+		NewLoopPathFn:      newLoopPathFn(wd),
+		AuthorFn:           authorFn(&p, global, wd),
+		ListLoopsFn:        listLoopsFn(ctx, cl, baseDir),
+		SetLoopEnabledFn:   setLoopEnabledFn(ctx, cl, baseDir, wd),
+		RunLoopOnceFn:      runLoopOnceFn(ctx, cl, baseDir, wd),
+		StopLoopGracefulFn: stopLoopGracefulFn(ctx, cl, baseDir),
+		RenameLoopFn:       renameLoopFn(ctx, cl, baseDir),
+		DeleteLoopFn:       deleteLoopFn(ctx, cl, baseDir),
 	})
 	p = tea.NewProgram(model)
 
 	go sendRunsSnapshot(ctx, p, cl)
 	go streamUpdates(ctx, p, cl)
+	go pollLoopsSnapshot(ctx, p, cl, baseDir)
 
 	_, err = p.Run()
 	return err
@@ -174,6 +187,25 @@ func sendRunsSnapshot(ctx context.Context, p *tea.Program, cl rpc.LooperClient) 
 	p.Send(RunsSnapshotMsg(runsSnapshotFromProto(resp.GetRuns())))
 }
 
+// pollLoopsSnapshot periodically fetches the Loops-catalog snapshot and
+// delivers it to p as a LoopsSnapshotMsg. There is no push stream for
+// catalog state (unlike StreamState for runs), so it's polled on
+// loopsTickInterval until ctx is cancelled.
+func pollLoopsSnapshot(ctx context.Context, p *tea.Program, cl rpc.LooperClient, baseDir string) {
+	fetch := listLoopsFn(ctx, cl, baseDir)
+	ticker := time.NewTicker(loopsTickInterval)
+	defer ticker.Stop()
+	p.Send(fetch()())
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.Send(fetch()())
+		}
+	}
+}
+
 // streamUpdates opens StreamState for all runs and forwards each update to
 // p as a StateUpdateMsg until the stream ends or ctx is cancelled.
 func streamUpdates(ctx context.Context, p *tea.Program, cl rpc.LooperClient) {
@@ -242,4 +274,109 @@ func runsSnapshotFromProto(runs []*rpc.RunInfo) []RunSnapshot {
 		})
 	}
 	return out
+}
+
+// loopsSnapshotFromProto translates a ListLoops response's []*rpc.LoopInfo
+// into the pure LoopsSnapshotMsg the Model understands.
+func loopsSnapshotFromProto(loops []*rpc.LoopInfo) LoopsSnapshotMsg {
+	out := make(LoopsSnapshotMsg, 0, len(loops))
+	for _, l := range loops {
+		out = append(out, LoopSnapshot{
+			Name: l.GetName(), Path: l.GetPath(), Enabled: l.GetEnabled(),
+			Steps: l.GetSteps(), RunID: l.GetRunId(),
+		})
+	}
+	return out
+}
+
+// listLoopsFn returns the Options.ListLoopsFn implementation.
+func listLoopsFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func() tea.Cmd {
+	return func() tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			resp, err := cl.ListLoops(rctx, &rpc.ListLoopsRequest{BaseDir: baseDir})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return loopsSnapshotFromProto(resp.GetLoops())
+		}
+	}
+}
+
+// setLoopEnabledFn returns the Options.SetLoopEnabledFn implementation.
+func setLoopEnabledFn(ctx context.Context, cl rpc.LooperClient, baseDir, workdir string) func(string, bool) tea.Cmd {
+	return func(loopName string, enabled bool) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.SetLoopEnabled(rctx, &rpc.SetLoopEnabledRequest{
+				LoopName: loopName, BaseDir: baseDir, Workdir: workdir, Enabled: enabled,
+			})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()
+		}
+	}
+}
+
+// runLoopOnceFn returns the Options.RunLoopOnceFn implementation.
+func runLoopOnceFn(ctx context.Context, cl rpc.LooperClient, baseDir, workdir string) func(string) tea.Cmd {
+	return func(loopName string) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.RunLoopOnce(rctx, &rpc.RunLoopOnceRequest{LoopName: loopName, BaseDir: baseDir, Workdir: workdir})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()
+		}
+	}
+}
+
+// stopLoopGracefulFn returns the Options.StopLoopGracefulFn implementation.
+func stopLoopGracefulFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func(string) tea.Cmd {
+	return func(runID string) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.StopLoopGraceful(rctx, &rpc.StopLoopGracefulRequest{RunId: runID})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()
+		}
+	}
+}
+
+// renameLoopFn returns the Options.RenameLoopFn implementation.
+func renameLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func(string, string) tea.Cmd {
+	return func(loopName, newName string) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.RenameLoop(rctx, &rpc.RenameLoopRequest{LoopName: loopName, NewName: newName, BaseDir: baseDir})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()
+		}
+	}
+}
+
+// deleteLoopFn returns the Options.DeleteLoopFn implementation.
+func deleteLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func(string) tea.Cmd {
+	return func(loopName string) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.DeleteLoop(rctx, &rpc.DeleteLoopRequest{LoopName: loopName, BaseDir: baseDir})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()
+		}
+	}
 }
