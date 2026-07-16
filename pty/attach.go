@@ -33,12 +33,12 @@ func (s *Session) Attach(in, out *os.File) error {
 
 	detachCh := make(chan struct{})
 	go func() {
-		var scanner detachScanner
+		var scanner DetachScanner
 		buf := make([]byte, 4096)
 		for {
 			n, err := in.Read(buf)
 			if n > 0 {
-				passthrough, detached := scanner.scan(buf[:n])
+				passthrough, detached := scanner.Scan(buf[:n])
 				if len(passthrough) > 0 {
 					_, _ = s.Write(passthrough)
 				}
