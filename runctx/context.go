@@ -107,3 +107,40 @@ func (rc *RunContext) AppendEvent(ev Event) error {
 func (rc *RunContext) WriteDigest(md string) error {
 	return os.WriteFile(filepath.Join(rc.Dir, "digest.md"), []byte(md), 0o644)
 }
+
+// Progress records which steps of an iteration have completed (returned
+// advance), and whether the iteration finished all of its steps. It is
+// persisted to progress.json so an interrupted iteration can be resumed.
+type Progress struct {
+	Completed []string `json:"completed"`
+	Done      bool     `json:"done"`
+}
+
+// SaveProgress writes p to dir/progress.json.
+func (rc *RunContext) SaveProgress(p Progress) error {
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal progress: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(rc.Dir, "progress.json"), data, 0o644); err != nil {
+		return fmt.Errorf("write progress.json: %w", err)
+	}
+	return nil
+}
+
+// LoadProgress reads dir/progress.json. If the file does not exist, it
+// returns a zero Progress and a nil error.
+func (rc *RunContext) LoadProgress() (Progress, error) {
+	data, err := os.ReadFile(filepath.Join(rc.Dir, "progress.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Progress{}, nil
+		}
+		return Progress{}, fmt.Errorf("read progress.json: %w", err)
+	}
+	var p Progress
+	if err := json.Unmarshal(data, &p); err != nil {
+		return Progress{}, fmt.Errorf("parse progress.json: %w", err)
+	}
+	return p, nil
+}
