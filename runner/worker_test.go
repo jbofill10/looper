@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jbofill10/looper/config"
@@ -261,6 +262,163 @@ func TestWorker_CtxCancelledStopsBeforeFurtherSteps(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(w.BaseDir, "runs", "l", "iter-1")); err == nil {
 		t.Errorf("expected no run dir to be created after immediate cancellation")
+	}
+}
+
+func TestWorker_ReportsWorkerIDAndTask(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps: []config.Step{
+			{Name: "get-task", Type: config.StepScript, Run: `echo TASK_ID=42 >> "$LOOPER_OUTPUT"`, Outputs: []string{"TASK_ID"}},
+			{Name: "work", Type: config.StepScript, Run: "true"},
+		},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+	w.ID = "w7"
+
+	var reports []Report
+	w.OnReport = func(r Report) { reports = append(reports, r) }
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, r := range reports {
+		if r.WorkerID != "w7" {
+			t.Errorf("report %+v: WorkerID = %q, want w7", r, r.WorkerID)
+		}
+	}
+
+	var sawGetTaskOutcome, sawWorkStep bool
+	for _, r := range reports {
+		if r.Kind == ReportOutcome && r.Step == "get-task" {
+			sawGetTaskOutcome = true
+			if r.Task != "42" {
+				t.Errorf("get-task outcome Task = %q, want 42", r.Task)
+			}
+		}
+		if r.Step == "work" {
+			sawWorkStep = true
+			if r.Task != "42" {
+				t.Errorf("work step report Task = %q, want 42 (set by prior step)", r.Task)
+			}
+		}
+	}
+	if !sawGetTaskOutcome {
+		t.Fatalf("no outcome report seen for get-task")
+	}
+	if !sawWorkStep {
+		t.Fatalf("no report seen for work step")
+	}
+}
+
+func TestWorker_CustomTaskVar(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps: []config.Step{
+			{Name: "get-task", Type: config.StepScript, Run: `echo ISSUE_ID=7 >> "$LOOPER_OUTPUT"`, Outputs: []string{"ISSUE_ID"}},
+		},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+	w.TaskVar = "ISSUE_ID"
+
+	var last Report
+	w.OnReport = func(r Report) {
+		if r.Kind == ReportOutcome {
+			last = r
+		}
+	}
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if last.Task != "7" {
+		t.Errorf("Task = %q, want 7 (via custom TaskVar)", last.Task)
+	}
+}
+
+// TestWorker_AcquireLockSerializesAcrossWorkers runs two workers concurrently
+// sharing an AcquireLock and a shell get-task script backed by a shared
+// counter file: each pull atomically appends its pulled task id to a sink
+// file and exits 78 once K tasks have been handed out. Because the shared
+// mutex wraps only the signals_no_work step, the two workers' script
+// invocations never overlap, so the counter/sink read-modify-write is safe
+// without any locking inside the script itself. Assert every worker sees a
+// unique set of task ids with no duplicates and no gaps.
+func TestWorker_AcquireLockSerializesAcrossWorkers(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter")
+	sink := filepath.Join(dir, "sink")
+	const k = 6
+
+	script := fmt.Sprintf(`
+n=$(cat %q 2>/dev/null || echo 0)
+n=$((n+1))
+echo "$n" > %q
+if [ "$n" -gt %d ]; then exit 78; fi
+echo "$n" >> %q
+echo TASK_ID=$n >> "$LOOPER_OUTPUT"
+`, counter, counter, k, sink)
+
+	loop := &config.Loop{
+		Name: "l",
+		Steps: []config.Step{
+			{Name: "get-task", Type: config.StepScript, SignalsNoWork: true, Run: script, Outputs: []string{"TASK_ID"}},
+			{Name: "work", Type: config.StepScript, Run: "true"},
+		},
+	}
+	if err := loop.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	var lock sync.Mutex
+	base := filepath.Join(dir, ".looper")
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, id := range []string{"w1", "w2"} {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			w := &Worker{
+				Loop:        loop,
+				BaseDir:     base,
+				Workdir:     dir,
+				Prompter:    &FakePrompter{},
+				ID:          id,
+				AcquireLock: &lock,
+			}
+			errs <- w.Run()
+		}(id)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	}
+
+	data, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatalf("read sink: %v", err)
+	}
+	lines := strings.Fields(strings.TrimSpace(string(data)))
+	seen := map[string]bool{}
+	for _, l := range lines {
+		if seen[l] {
+			t.Fatalf("task id %q pulled more than once; sink contents: %q", l, data)
+		}
+		seen[l] = true
+	}
+	if len(seen) != k {
+		t.Fatalf("got %d distinct task ids, want %d; sink contents: %q", len(seen), k, data)
+	}
+	for i := 1; i <= k; i++ {
+		if !seen[fmt.Sprintf("%d", i)] {
+			t.Errorf("task id %d never pulled; sink contents: %q", i, data)
+		}
 	}
 }
 

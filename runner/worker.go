@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jbofill10/looper/config"
@@ -27,6 +28,13 @@ type Report struct {
 	State     string
 	Message   string
 	Iteration int
+
+	// WorkerID identifies which Worker emitted this report; empty for a
+	// Worker with no ID set (preserves single-worker behavior).
+	WorkerID string
+	// Task is the current value of the loop's task var (Worker.TaskVar),
+	// looked up after the acquisition step has run; empty until then.
+	Task string
 }
 
 // Worker drives one loop's iterations single-threaded, in-process.
@@ -39,6 +47,20 @@ type Worker struct {
 	Global      *config.Global // harness configuration; defaults to config.DefaultGlobal()
 	HarnessName string         // default harness name; falls back to Global.DefaultHarness
 	LooperBin   string         // absolute path to the looper binary, used by interactive steps for hook wiring
+
+	// ID identifies this worker among others in the same run (e.g. "w1",
+	// "w2"). Empty preserves prior single-worker behavior: reports carry
+	// no WorkerID and iteration run dirs are not namespaced.
+	ID string
+	// TaskVar is the loop output var holding the current work unit's
+	// identity, looked up after the acquisition step runs. Empty defaults
+	// to "TASK_ID".
+	TaskVar string
+	// AcquireLock, if set, is held for the duration of any step whose
+	// SignalsNoWork is true, serializing task acquisition across the
+	// workers of a run that share the same lock. Nil preserves prior
+	// unserialized behavior.
+	AcquireLock sync.Locker
 
 	// InteractiveRun, if set, replaces the default local-pty run
 	// implementation (runPTY) for interactive steps. The daemon injects an
@@ -58,11 +80,36 @@ type Worker struct {
 	Ctx context.Context
 }
 
-// report calls w.OnReport if set.
+// report calls w.OnReport if set, tagging r with the worker's id.
 func (w *Worker) report(r Report) {
-	if w.OnReport != nil {
-		w.OnReport(r)
+	if w.OnReport == nil {
+		return
 	}
+	r.WorkerID = w.ID
+	w.OnReport(r)
+}
+
+// reportTask is like report but additionally tags r with the current task
+// (the value of w.taskVar() in rc), reflecting whatever the acquisition step
+// has set so far. rc may be nil (before an iteration's RunContext exists).
+func (w *Worker) reportTask(rc *runctx.RunContext, r Report) {
+	if w.OnReport == nil {
+		return
+	}
+	if rc != nil {
+		if v, ok := rc.Get(w.taskVar()); ok {
+			r.Task = v
+		}
+	}
+	w.report(r)
+}
+
+// taskVar returns w.TaskVar, defaulting to "TASK_ID" when unset.
+func (w *Worker) taskVar() string {
+	if w.TaskVar == "" {
+		return "TASK_ID"
+	}
+	return w.TaskVar
 }
 
 // ctxErr returns a wrapped error if w.Ctx is set and cancelled, else nil.
@@ -118,6 +165,9 @@ func (w *Worker) run() error {
 // loop should end (no-work signalled).
 func (w *Worker) runIteration(iter int, id string) (stop bool, err error) {
 	dir := filepath.Join(w.BaseDir, "runs", w.Loop.Name, id)
+	if w.ID != "" {
+		dir = filepath.Join(w.BaseDir, "runs", w.Loop.Name, w.ID, id)
+	}
 	rc, err := runctx.New(dir)
 	if err != nil {
 		return false, err
@@ -137,14 +187,14 @@ func (w *Worker) runIteration(iter int, id string) (stop bool, err error) {
 		if err != nil {
 			return false, err
 		}
-		w.report(Report{Kind: ReportStepStart, Step: step.Name, Iteration: iter})
+		w.reportTask(rc, Report{Kind: ReportStepStart, Step: step.Name, Iteration: iter})
 		_ = rc.AppendEvent(runctx.Event{Step: step.Name, Kind: "start"})
-		outcome, err := exec.Run(rc, step)
+		outcome, err := w.runStep(exec, rc, step)
 		if err != nil {
 			return false, fmt.Errorf("step %q: %w", step.Name, err)
 		}
 		_ = rc.AppendEvent(runctx.Event{Step: step.Name, Kind: "outcome", Message: outcome.String()})
-		w.report(Report{Kind: ReportOutcome, Step: step.Name, State: outcome.String(), Iteration: iter})
+		w.reportTask(rc, Report{Kind: ReportOutcome, Step: step.Name, State: outcome.String(), Iteration: iter})
 		fmt.Fprintf(&digest, "- %s → %s\n", step.Name, outcome)
 
 		if err := rc.Save(); err != nil {
@@ -165,6 +215,18 @@ func (w *Worker) runIteration(iter int, id string) (stop bool, err error) {
 		}
 	}
 	return false, rc.WriteDigest(digest.String())
+}
+
+// runStep executes exec against step, holding w.AcquireLock (if set) for the
+// duration of the call when step.SignalsNoWork is true. This serializes task
+// acquisition across the workers of a run that share the same lock, without
+// holding it for the rest of the step's own work.
+func (w *Worker) runStep(exec Executor, rc *runctx.RunContext, step config.Step) (Outcome, error) {
+	if step.SignalsNoWork && w.AcquireLock != nil {
+		w.AcquireLock.Lock()
+		defer w.AcquireLock.Unlock()
+	}
+	return exec.Run(rc, step)
 }
 
 func (w *Worker) executorFor(step config.Step) (Executor, error) {
