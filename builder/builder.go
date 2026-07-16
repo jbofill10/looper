@@ -169,12 +169,30 @@ func (m Model) Quit() bool {
 }
 
 // revalidate recomputes m.stepErrors from m.loop.Steps by calling
-// (*config.Step).Validate() on each, independent of the others.
+// (*config.Step).Validate() on each, independent of the others, and also
+// flagging duplicate step names — a cross-step, loop-level concern that
+// Step.Validate() alone can't catch (only config.Loop.Validate() does),
+// but which the builder needs to surface visually before it manifests as
+// an opaque save/delete failure.
 func (m *Model) revalidate() {
+	counts := map[string]int{}
+	for i := range m.loop.Steps {
+		counts[m.loop.Steps[i].Name]++
+	}
+
 	errs := map[string]error{}
 	for i := range m.loop.Steps {
 		s := &m.loop.Steps[i]
-		if err := s.Validate(); err != nil {
+		err := s.Validate()
+		if counts[s.Name] > 1 {
+			dupErr := fmt.Errorf("duplicate step name %q", s.Name)
+			if err != nil {
+				err = fmt.Errorf("%w; %v", err, dupErr)
+			} else {
+				err = dupErr
+			}
+		}
+		if err != nil {
 			errs[s.Name] = err
 		}
 	}

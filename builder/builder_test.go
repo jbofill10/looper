@@ -137,6 +137,24 @@ func TestSessionDoneMsg_ReloadsAndFlagsInvalidStep(t *testing.T) {
 	}
 }
 
+func TestRevalidate_FlagsDuplicateStepNamesOnBothSteps(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := dir + "/.looper/loops/existing.yaml"
+	writeLoop(t, loopPath, "name: existing\nsteps:\n  - name: a\n    type: manual\n  - name: a\n    type: manual\n")
+	m, err := New(dir, loopPath, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := m.StepErrors()
+	if len(m.Steps()) != 2 {
+		t.Fatalf("expected 2 steps loaded, got %d", len(m.Steps()))
+	}
+	if errs["a"] == nil {
+		t.Errorf("expected duplicate step name %q to be flagged invalid", "a")
+	}
+}
+
 func TestEditStep_OnInvalidStepIncludesErrorInRequest(t *testing.T) {
 	dir := t.TempDir()
 	loopPath := dir + "/.looper/loops/existing.yaml"
