@@ -27,24 +27,44 @@ builder engine rather than building new step-editing logic.
 
 ## Data model & persistence
 
-A new daemon-side state file, `<base_dir>/state.json` (sibling to
-`loops/`), tracks which loops are enabled:
+looperd is a single per-user process shared across however many project
+directories invoke it (one Unix socket per uid — see `client.SocketPath()`);
+every RPC that touches a loop already takes an explicit `base_dir`/`workdir`,
+since the daemon has no built-in notion of "the current project." A
+per-project `<base_dir>/state.json` would therefore be invisible to the
+daemon on its own restart — it would have no way to discover which project
+directories to go re-read.
+
+Instead, a single **daemon-wide registry file** lives next to the daemon's
+socket (i.e. resolved the same way `client.SocketPath()` resolves the
+socket path — `$XDG_RUNTIME_DIR/looper-state.json` or the `os.TempDir()`
+per-user fallback), keyed by `(base_dir, loop_name)`:
 
 ```json
-{ "loops": { "jira-tracker": { "enabled": true } } }
+{
+  "loops": {
+    "/Users/juan/proj1|jira-tracker": {
+      "baseDir": "/Users/juan/proj1/.looper",
+      "workdir": "/Users/juan/proj1",
+      "loopName": "jira-tracker",
+      "enabled": true
+    }
+  }
+}
 ```
 
 - Loop YAML files remain pure workflow definitions; enablement is daemon
   runtime state, not loop config.
-- On daemon startup, after loading `state.json`, the daemon calls
-  `StartLoop` for every loop marked enabled that isn't already running
-  (auto-resume).
-- Loops absent from `state.json` are treated as disabled (default).
+- On daemon startup, after loading the registry, the daemon calls
+  `StartLoop` for every entry marked enabled that isn't already running
+  (auto-resume) — it already has that entry's `base_dir`/`workdir`, so no
+  project discovery is needed.
+- Loops absent from the registry are treated as disabled (default).
 
 ### Run once
 
 `RunLoopOnce` starts a run with `max_iterations` forced to `1` for that
-invocation only. It does not read or write `state.json` and has no effect
+invocation only. It does not read or write the registry and has no effect
 on the loop's enabled flag.
 
 ### Graceful stop vs hard abort
@@ -65,22 +85,24 @@ Two distinct stop paths, both operating on a run:
 
 Added to `proto/looper.proto`'s `Looper` service:
 
-- `ListLoops(ListLoopsRequest) returns (ListLoopsResponse)` — scans
-  `<base_dir>/loops/*.yaml`, cross-referencing `state.json` and active
-  runs. Returns, per loop: name, file path, enabled bool, step names in
-  order, and the active `run_id` if currently running (empty otherwise).
-- `SetLoopEnabled(SetLoopEnabledRequest{loop_name, enabled}) returns (...)`
-  — persists the flag to `state.json`. Enabling a not-yet-running loop
-  starts it; disabling a running loop triggers a graceful stop.
-- `RunLoopOnce(RunLoopOnceRequest{loop_name}) returns (RunLoopOnceResponse{run_id})`
+- `ListLoops(ListLoopsRequest{base_dir}) returns (ListLoopsResponse)` —
+  scans `<base_dir>/loops/*.yaml`, cross-referencing the daemon-wide
+  registry and active runs. Returns, per loop: name, file path, enabled
+  bool, step names in order, and the active `run_id` if currently running
+  (empty otherwise).
+- `SetLoopEnabled(SetLoopEnabledRequest{loop_name, base_dir, workdir, enabled}) returns (...)`
+  — persists the flag (plus base_dir/workdir, needed for auto-resume) to
+  the registry. Enabling a not-yet-running loop starts it; disabling a
+  running loop triggers a graceful stop.
+- `RunLoopOnce(RunLoopOnceRequest{loop_name, base_dir, workdir}) returns (RunLoopOnceResponse{run_id})`
   — see above.
 - `StopLoopGraceful(StopLoopGracefulRequest{run_id}) returns (...)` — sets
   the graceful stop-flag on the run. Existing `StopLoop` remains the
   unchanged hard-abort path.
-- `RenameLoop(RenameLoopRequest{loop_name, new_name}) returns (...)` /
-  `DeleteLoop(DeleteLoopRequest{loop_name}) returns (...)` — rename/delete
-  the loop's YAML file and its `state.json` entry. Both return an error if
-  the loop currently has an active run.
+- `RenameLoop(RenameLoopRequest{loop_name, new_name, base_dir}) returns (...)` /
+  `DeleteLoop(DeleteLoopRequest{loop_name, base_dir}) returns (...)` —
+  rename/delete the loop's YAML file and its registry entry (if any). Both
+  return an error if the loop currently has an active run.
 
 `ListRuns` is unchanged (active runs only) — it remains the source for the
 existing flat worker table; `ListLoops` is the new source the Loops tree
