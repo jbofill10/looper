@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/rpc"
 	"google.golang.org/grpc"
 )
@@ -33,6 +34,15 @@ func New() *Server {
 		looperBin = "looper"
 	}
 	return &Server{manager: NewManager(nil, looperBin)}
+}
+
+// NewWithGlobal is like New but lets the caller supply the harness/global
+// configuration explicitly instead of config.DefaultGlobal(). It exists
+// primarily so tests outside package daemon (e.g. the cli package's attach
+// smoke test) can stand up a real daemon with a non-`claude` interactive
+// harness such as `sh -c cat`, without needing a real coding-agent binary.
+func NewWithGlobal(global *config.Global, looperBin string) *Server {
+	return &Server{manager: NewManager(global, looperBin)}
 }
 
 // Ping reports the daemon's version.

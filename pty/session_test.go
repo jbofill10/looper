@@ -3,6 +3,7 @@ package pty
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -101,5 +102,90 @@ func TestSession_WaitAfterNormalExitReturnsNil(t *testing.T) {
 
 	if err := s.Wait(); err != nil {
 		t.Errorf("Wait: %v", err)
+	}
+}
+
+// syncBuffer is a *bytes.Buffer guarded by a mutex, safe for concurrent
+// Write (from the session's reader goroutine) and Read/String (from the
+// test goroutine).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func waitForSyncBuf(t *testing.T, buf *syncBuffer, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), substr) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("buffer never contained %q; got %q", substr, buf.String())
+}
+
+func TestSession_PipeToStreamsLiveOutput(t *testing.T) {
+	s, err := Start(Config{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Close()
+
+	buf := &syncBuffer{}
+	stop := s.PipeTo(buf)
+
+	if _, err := s.Write([]byte("ping\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	waitForSyncBuf(t, buf, "ping")
+
+	stop()
+
+	// Further output must not reach buf once stopped. Since stop() is
+	// idempotent and there's no direct signal for "will never arrive",
+	// snapshot the buffer, write more input, and assert it doesn't grow.
+	before := buf.String()
+	if _, err := s.Write([]byte("pong\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	waitForScrollback(t, s, "pong")
+	if got := buf.String(); got != before {
+		t.Errorf("buf grew after stop(): before=%q after=%q", before, got)
+	}
+
+	stop() // idempotent
+}
+
+func TestSession_PipeToReplaysScrollback(t *testing.T) {
+	s, err := Start(Config{Argv: []string{"cat"}})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Close()
+
+	if _, err := s.Write([]byte("before\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	waitForScrollback(t, s, "before")
+
+	buf := &syncBuffer{}
+	stop := s.PipeTo(buf)
+	defer stop()
+
+	if !strings.Contains(buf.String(), "before") {
+		t.Errorf("PipeTo did not replay scrollback; buf = %q", buf.String())
 	}
 }

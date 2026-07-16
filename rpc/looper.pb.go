@@ -21,6 +21,244 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type AttachInput struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Msg:
+	//
+	//	*AttachInput_Start
+	//	*AttachInput_Data
+	//	*AttachInput_Resize
+	Msg           isAttachInput_Msg `protobuf_oneof:"msg"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttachInput) Reset() {
+	*x = AttachInput{}
+	mi := &file_proto_looper_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttachInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttachInput) ProtoMessage() {}
+
+func (x *AttachInput) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_looper_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttachInput.ProtoReflect.Descriptor instead.
+func (*AttachInput) Descriptor() ([]byte, []int) {
+	return file_proto_looper_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *AttachInput) GetMsg() isAttachInput_Msg {
+	if x != nil {
+		return x.Msg
+	}
+	return nil
+}
+
+func (x *AttachInput) GetStart() *AttachStart {
+	if x != nil {
+		if x, ok := x.Msg.(*AttachInput_Start); ok {
+			return x.Start
+		}
+	}
+	return nil
+}
+
+func (x *AttachInput) GetData() []byte {
+	if x != nil {
+		if x, ok := x.Msg.(*AttachInput_Data); ok {
+			return x.Data
+		}
+	}
+	return nil
+}
+
+func (x *AttachInput) GetResize() *Resize {
+	if x != nil {
+		if x, ok := x.Msg.(*AttachInput_Resize); ok {
+			return x.Resize
+		}
+	}
+	return nil
+}
+
+type isAttachInput_Msg interface {
+	isAttachInput_Msg()
+}
+
+type AttachInput_Start struct {
+	Start *AttachStart `protobuf:"bytes,1,opt,name=start,proto3,oneof"` // MUST be the first message
+}
+
+type AttachInput_Data struct {
+	Data []byte `protobuf:"bytes,2,opt,name=data,proto3,oneof"` // stdin bytes
+}
+
+type AttachInput_Resize struct {
+	Resize *Resize `protobuf:"bytes,3,opt,name=resize,proto3,oneof"` // terminal resize
+}
+
+func (*AttachInput_Start) isAttachInput_Msg() {}
+
+func (*AttachInput_Data) isAttachInput_Msg() {}
+
+func (*AttachInput_Resize) isAttachInput_Msg() {}
+
+type AttachStart struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttachStart) Reset() {
+	*x = AttachStart{}
+	mi := &file_proto_looper_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttachStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttachStart) ProtoMessage() {}
+
+func (x *AttachStart) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_looper_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttachStart.ProtoReflect.Descriptor instead.
+func (*AttachStart) Descriptor() ([]byte, []int) {
+	return file_proto_looper_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *AttachStart) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+type Resize struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rows          uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Resize) Reset() {
+	*x = Resize{}
+	mi := &file_proto_looper_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Resize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Resize) ProtoMessage() {}
+
+func (x *Resize) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_looper_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Resize.ProtoReflect.Descriptor instead.
+func (*Resize) Descriptor() ([]byte, []int) {
+	return file_proto_looper_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *Resize) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *Resize) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+type AttachOutput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttachOutput) Reset() {
+	*x = AttachOutput{}
+	mi := &file_proto_looper_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttachOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttachOutput) ProtoMessage() {}
+
+func (x *AttachOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_looper_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttachOutput.ProtoReflect.Descriptor instead.
+func (*AttachOutput) Descriptor() ([]byte, []int) {
+	return file_proto_looper_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AttachOutput) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 type PingRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -29,7 +267,7 @@ type PingRequest struct {
 
 func (x *PingRequest) Reset() {
 	*x = PingRequest{}
-	mi := &file_proto_looper_proto_msgTypes[0]
+	mi := &file_proto_looper_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -41,7 +279,7 @@ func (x *PingRequest) String() string {
 func (*PingRequest) ProtoMessage() {}
 
 func (x *PingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[0]
+	mi := &file_proto_looper_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -54,7 +292,7 @@ func (x *PingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingRequest.ProtoReflect.Descriptor instead.
 func (*PingRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{0}
+	return file_proto_looper_proto_rawDescGZIP(), []int{4}
 }
 
 type PingResponse struct {
@@ -66,7 +304,7 @@ type PingResponse struct {
 
 func (x *PingResponse) Reset() {
 	*x = PingResponse{}
-	mi := &file_proto_looper_proto_msgTypes[1]
+	mi := &file_proto_looper_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -78,7 +316,7 @@ func (x *PingResponse) String() string {
 func (*PingResponse) ProtoMessage() {}
 
 func (x *PingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[1]
+	mi := &file_proto_looper_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -91,7 +329,7 @@ func (x *PingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PingResponse.ProtoReflect.Descriptor instead.
 func (*PingResponse) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{1}
+	return file_proto_looper_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PingResponse) GetVersion() string {
@@ -109,7 +347,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_proto_looper_proto_msgTypes[2]
+	mi := &file_proto_looper_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -121,7 +359,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[2]
+	mi := &file_proto_looper_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -134,7 +372,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{2}
+	return file_proto_looper_proto_rawDescGZIP(), []int{6}
 }
 
 type ShutdownResponse struct {
@@ -145,7 +383,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_proto_looper_proto_msgTypes[3]
+	mi := &file_proto_looper_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -157,7 +395,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[3]
+	mi := &file_proto_looper_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -170,7 +408,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{3}
+	return file_proto_looper_proto_rawDescGZIP(), []int{7}
 }
 
 type StartLoopRequest struct {
@@ -185,7 +423,7 @@ type StartLoopRequest struct {
 
 func (x *StartLoopRequest) Reset() {
 	*x = StartLoopRequest{}
-	mi := &file_proto_looper_proto_msgTypes[4]
+	mi := &file_proto_looper_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -197,7 +435,7 @@ func (x *StartLoopRequest) String() string {
 func (*StartLoopRequest) ProtoMessage() {}
 
 func (x *StartLoopRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[4]
+	mi := &file_proto_looper_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -210,7 +448,7 @@ func (x *StartLoopRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartLoopRequest.ProtoReflect.Descriptor instead.
 func (*StartLoopRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{4}
+	return file_proto_looper_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *StartLoopRequest) GetLoopName() string {
@@ -250,7 +488,7 @@ type StartLoopResponse struct {
 
 func (x *StartLoopResponse) Reset() {
 	*x = StartLoopResponse{}
-	mi := &file_proto_looper_proto_msgTypes[5]
+	mi := &file_proto_looper_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -262,7 +500,7 @@ func (x *StartLoopResponse) String() string {
 func (*StartLoopResponse) ProtoMessage() {}
 
 func (x *StartLoopResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[5]
+	mi := &file_proto_looper_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -275,7 +513,7 @@ func (x *StartLoopResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartLoopResponse.ProtoReflect.Descriptor instead.
 func (*StartLoopResponse) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{5}
+	return file_proto_looper_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StartLoopResponse) GetRunId() string {
@@ -294,7 +532,7 @@ type StopLoopRequest struct {
 
 func (x *StopLoopRequest) Reset() {
 	*x = StopLoopRequest{}
-	mi := &file_proto_looper_proto_msgTypes[6]
+	mi := &file_proto_looper_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -306,7 +544,7 @@ func (x *StopLoopRequest) String() string {
 func (*StopLoopRequest) ProtoMessage() {}
 
 func (x *StopLoopRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[6]
+	mi := &file_proto_looper_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -319,7 +557,7 @@ func (x *StopLoopRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopLoopRequest.ProtoReflect.Descriptor instead.
 func (*StopLoopRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{6}
+	return file_proto_looper_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StopLoopRequest) GetRunId() string {
@@ -337,7 +575,7 @@ type StopLoopResponse struct {
 
 func (x *StopLoopResponse) Reset() {
 	*x = StopLoopResponse{}
-	mi := &file_proto_looper_proto_msgTypes[7]
+	mi := &file_proto_looper_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -349,7 +587,7 @@ func (x *StopLoopResponse) String() string {
 func (*StopLoopResponse) ProtoMessage() {}
 
 func (x *StopLoopResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[7]
+	mi := &file_proto_looper_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -362,7 +600,7 @@ func (x *StopLoopResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopLoopResponse.ProtoReflect.Descriptor instead.
 func (*StopLoopResponse) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{7}
+	return file_proto_looper_proto_rawDescGZIP(), []int{11}
 }
 
 type ListRunsRequest struct {
@@ -373,7 +611,7 @@ type ListRunsRequest struct {
 
 func (x *ListRunsRequest) Reset() {
 	*x = ListRunsRequest{}
-	mi := &file_proto_looper_proto_msgTypes[8]
+	mi := &file_proto_looper_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +623,7 @@ func (x *ListRunsRequest) String() string {
 func (*ListRunsRequest) ProtoMessage() {}
 
 func (x *ListRunsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[8]
+	mi := &file_proto_looper_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +636,7 @@ func (x *ListRunsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRunsRequest.ProtoReflect.Descriptor instead.
 func (*ListRunsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{8}
+	return file_proto_looper_proto_rawDescGZIP(), []int{12}
 }
 
 type RunInfo struct {
@@ -416,7 +654,7 @@ type RunInfo struct {
 
 func (x *RunInfo) Reset() {
 	*x = RunInfo{}
-	mi := &file_proto_looper_proto_msgTypes[9]
+	mi := &file_proto_looper_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +666,7 @@ func (x *RunInfo) String() string {
 func (*RunInfo) ProtoMessage() {}
 
 func (x *RunInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[9]
+	mi := &file_proto_looper_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +679,7 @@ func (x *RunInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunInfo.ProtoReflect.Descriptor instead.
 func (*RunInfo) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{9}
+	return file_proto_looper_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RunInfo) GetRunId() string {
@@ -502,7 +740,7 @@ type ListRunsResponse struct {
 
 func (x *ListRunsResponse) Reset() {
 	*x = ListRunsResponse{}
-	mi := &file_proto_looper_proto_msgTypes[10]
+	mi := &file_proto_looper_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -514,7 +752,7 @@ func (x *ListRunsResponse) String() string {
 func (*ListRunsResponse) ProtoMessage() {}
 
 func (x *ListRunsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[10]
+	mi := &file_proto_looper_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -527,7 +765,7 @@ func (x *ListRunsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListRunsResponse.ProtoReflect.Descriptor instead.
 func (*ListRunsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{10}
+	return file_proto_looper_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListRunsResponse) GetRuns() []*RunInfo {
@@ -546,7 +784,7 @@ type StreamStateRequest struct {
 
 func (x *StreamStateRequest) Reset() {
 	*x = StreamStateRequest{}
-	mi := &file_proto_looper_proto_msgTypes[11]
+	mi := &file_proto_looper_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -558,7 +796,7 @@ func (x *StreamStateRequest) String() string {
 func (*StreamStateRequest) ProtoMessage() {}
 
 func (x *StreamStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[11]
+	mi := &file_proto_looper_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -571,7 +809,7 @@ func (x *StreamStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamStateRequest.ProtoReflect.Descriptor instead.
 func (*StreamStateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{11}
+	return file_proto_looper_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *StreamStateRequest) GetRunId() string {
@@ -599,7 +837,7 @@ type StateUpdate struct {
 
 func (x *StateUpdate) Reset() {
 	*x = StateUpdate{}
-	mi := &file_proto_looper_proto_msgTypes[12]
+	mi := &file_proto_looper_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -611,7 +849,7 @@ func (x *StateUpdate) String() string {
 func (*StateUpdate) ProtoMessage() {}
 
 func (x *StateUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[12]
+	mi := &file_proto_looper_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -624,7 +862,7 @@ func (x *StateUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateUpdate.ProtoReflect.Descriptor instead.
 func (*StateUpdate) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{12}
+	return file_proto_looper_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *StateUpdate) GetRunId() string {
@@ -701,7 +939,7 @@ type RespondDecisionRequest struct {
 
 func (x *RespondDecisionRequest) Reset() {
 	*x = RespondDecisionRequest{}
-	mi := &file_proto_looper_proto_msgTypes[13]
+	mi := &file_proto_looper_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +951,7 @@ func (x *RespondDecisionRequest) String() string {
 func (*RespondDecisionRequest) ProtoMessage() {}
 
 func (x *RespondDecisionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[13]
+	mi := &file_proto_looper_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +964,7 @@ func (x *RespondDecisionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RespondDecisionRequest.ProtoReflect.Descriptor instead.
 func (*RespondDecisionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{13}
+	return file_proto_looper_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RespondDecisionRequest) GetRunId() string {
@@ -758,7 +996,7 @@ type RespondDecisionResponse struct {
 
 func (x *RespondDecisionResponse) Reset() {
 	*x = RespondDecisionResponse{}
-	mi := &file_proto_looper_proto_msgTypes[14]
+	mi := &file_proto_looper_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -770,7 +1008,7 @@ func (x *RespondDecisionResponse) String() string {
 func (*RespondDecisionResponse) ProtoMessage() {}
 
 func (x *RespondDecisionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_looper_proto_msgTypes[14]
+	mi := &file_proto_looper_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -783,14 +1021,26 @@ func (x *RespondDecisionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RespondDecisionResponse.ProtoReflect.Descriptor instead.
 func (*RespondDecisionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_looper_proto_rawDescGZIP(), []int{14}
+	return file_proto_looper_proto_rawDescGZIP(), []int{18}
 }
 
 var File_proto_looper_proto protoreflect.FileDescriptor
 
 const file_proto_looper_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/looper.proto\x12\tlooper.v1\"\r\n" +
+	"\x12proto/looper.proto\x12\tlooper.v1\"\x87\x01\n" +
+	"\vAttachInput\x12.\n" +
+	"\x05start\x18\x01 \x01(\v2\x16.looper.v1.AttachStartH\x00R\x05start\x12\x14\n" +
+	"\x04data\x18\x02 \x01(\fH\x00R\x04data\x12+\n" +
+	"\x06resize\x18\x03 \x01(\v2\x11.looper.v1.ResizeH\x00R\x06resizeB\x05\n" +
+	"\x03msg\"$\n" +
+	"\vAttachStart\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"0\n" +
+	"\x06Resize\x12\x12\n" +
+	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x12\n" +
+	"\x04cols\x18\x02 \x01(\rR\x04cols\"\"\n" +
+	"\fAttachOutput\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"\r\n" +
 	"\vPingRequest\"(\n" +
 	"\fPingResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\"\x11\n" +
@@ -835,7 +1085,7 @@ const file_proto_looper_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tR\trequestId\x12\x18\n" +
 	"\aoutcome\x18\x03 \x01(\tR\aoutcome\"\x19\n" +
-	"\x17RespondDecisionResponse2\xfa\x03\n" +
+	"\x17RespondDecisionResponse2\xb9\x04\n" +
 	"\x06Looper\x127\n" +
 	"\x04Ping\x12\x16.looper.v1.PingRequest\x1a\x17.looper.v1.PingResponse\x12C\n" +
 	"\bShutdown\x12\x1a.looper.v1.ShutdownRequest\x1a\x1b.looper.v1.ShutdownResponse\x12F\n" +
@@ -843,7 +1093,8 @@ const file_proto_looper_proto_rawDesc = "" +
 	"\bStopLoop\x12\x1a.looper.v1.StopLoopRequest\x1a\x1b.looper.v1.StopLoopResponse\x12C\n" +
 	"\bListRuns\x12\x1a.looper.v1.ListRunsRequest\x1a\x1b.looper.v1.ListRunsResponse\x12F\n" +
 	"\vStreamState\x12\x1d.looper.v1.StreamStateRequest\x1a\x16.looper.v1.StateUpdate0\x01\x12X\n" +
-	"\x0fRespondDecision\x12!.looper.v1.RespondDecisionRequest\x1a\".looper.v1.RespondDecisionResponseB%Z#github.com/jbofill10/looper/rpc;rpcb\x06proto3"
+	"\x0fRespondDecision\x12!.looper.v1.RespondDecisionRequest\x1a\".looper.v1.RespondDecisionResponse\x12=\n" +
+	"\x06Attach\x12\x16.looper.v1.AttachInput\x1a\x17.looper.v1.AttachOutput(\x010\x01B%Z#github.com/jbofill10/looper/rpc;rpcb\x06proto3"
 
 var (
 	file_proto_looper_proto_rawDescOnce sync.Once
@@ -857,45 +1108,53 @@ func file_proto_looper_proto_rawDescGZIP() []byte {
 	return file_proto_looper_proto_rawDescData
 }
 
-var file_proto_looper_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_proto_looper_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_proto_looper_proto_goTypes = []any{
-	(*PingRequest)(nil),             // 0: looper.v1.PingRequest
-	(*PingResponse)(nil),            // 1: looper.v1.PingResponse
-	(*ShutdownRequest)(nil),         // 2: looper.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),        // 3: looper.v1.ShutdownResponse
-	(*StartLoopRequest)(nil),        // 4: looper.v1.StartLoopRequest
-	(*StartLoopResponse)(nil),       // 5: looper.v1.StartLoopResponse
-	(*StopLoopRequest)(nil),         // 6: looper.v1.StopLoopRequest
-	(*StopLoopResponse)(nil),        // 7: looper.v1.StopLoopResponse
-	(*ListRunsRequest)(nil),         // 8: looper.v1.ListRunsRequest
-	(*RunInfo)(nil),                 // 9: looper.v1.RunInfo
-	(*ListRunsResponse)(nil),        // 10: looper.v1.ListRunsResponse
-	(*StreamStateRequest)(nil),      // 11: looper.v1.StreamStateRequest
-	(*StateUpdate)(nil),             // 12: looper.v1.StateUpdate
-	(*RespondDecisionRequest)(nil),  // 13: looper.v1.RespondDecisionRequest
-	(*RespondDecisionResponse)(nil), // 14: looper.v1.RespondDecisionResponse
+	(*AttachInput)(nil),             // 0: looper.v1.AttachInput
+	(*AttachStart)(nil),             // 1: looper.v1.AttachStart
+	(*Resize)(nil),                  // 2: looper.v1.Resize
+	(*AttachOutput)(nil),            // 3: looper.v1.AttachOutput
+	(*PingRequest)(nil),             // 4: looper.v1.PingRequest
+	(*PingResponse)(nil),            // 5: looper.v1.PingResponse
+	(*ShutdownRequest)(nil),         // 6: looper.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),        // 7: looper.v1.ShutdownResponse
+	(*StartLoopRequest)(nil),        // 8: looper.v1.StartLoopRequest
+	(*StartLoopResponse)(nil),       // 9: looper.v1.StartLoopResponse
+	(*StopLoopRequest)(nil),         // 10: looper.v1.StopLoopRequest
+	(*StopLoopResponse)(nil),        // 11: looper.v1.StopLoopResponse
+	(*ListRunsRequest)(nil),         // 12: looper.v1.ListRunsRequest
+	(*RunInfo)(nil),                 // 13: looper.v1.RunInfo
+	(*ListRunsResponse)(nil),        // 14: looper.v1.ListRunsResponse
+	(*StreamStateRequest)(nil),      // 15: looper.v1.StreamStateRequest
+	(*StateUpdate)(nil),             // 16: looper.v1.StateUpdate
+	(*RespondDecisionRequest)(nil),  // 17: looper.v1.RespondDecisionRequest
+	(*RespondDecisionResponse)(nil), // 18: looper.v1.RespondDecisionResponse
 }
 var file_proto_looper_proto_depIdxs = []int32{
-	9,  // 0: looper.v1.ListRunsResponse.runs:type_name -> looper.v1.RunInfo
-	0,  // 1: looper.v1.Looper.Ping:input_type -> looper.v1.PingRequest
-	2,  // 2: looper.v1.Looper.Shutdown:input_type -> looper.v1.ShutdownRequest
-	4,  // 3: looper.v1.Looper.StartLoop:input_type -> looper.v1.StartLoopRequest
-	6,  // 4: looper.v1.Looper.StopLoop:input_type -> looper.v1.StopLoopRequest
-	8,  // 5: looper.v1.Looper.ListRuns:input_type -> looper.v1.ListRunsRequest
-	11, // 6: looper.v1.Looper.StreamState:input_type -> looper.v1.StreamStateRequest
-	13, // 7: looper.v1.Looper.RespondDecision:input_type -> looper.v1.RespondDecisionRequest
-	1,  // 8: looper.v1.Looper.Ping:output_type -> looper.v1.PingResponse
-	3,  // 9: looper.v1.Looper.Shutdown:output_type -> looper.v1.ShutdownResponse
-	5,  // 10: looper.v1.Looper.StartLoop:output_type -> looper.v1.StartLoopResponse
-	7,  // 11: looper.v1.Looper.StopLoop:output_type -> looper.v1.StopLoopResponse
-	10, // 12: looper.v1.Looper.ListRuns:output_type -> looper.v1.ListRunsResponse
-	12, // 13: looper.v1.Looper.StreamState:output_type -> looper.v1.StateUpdate
-	14, // 14: looper.v1.Looper.RespondDecision:output_type -> looper.v1.RespondDecisionResponse
-	8,  // [8:15] is the sub-list for method output_type
-	1,  // [1:8] is the sub-list for method input_type
-	1,  // [1:1] is the sub-list for extension type_name
-	1,  // [1:1] is the sub-list for extension extendee
-	0,  // [0:1] is the sub-list for field type_name
+	1,  // 0: looper.v1.AttachInput.start:type_name -> looper.v1.AttachStart
+	2,  // 1: looper.v1.AttachInput.resize:type_name -> looper.v1.Resize
+	13, // 2: looper.v1.ListRunsResponse.runs:type_name -> looper.v1.RunInfo
+	4,  // 3: looper.v1.Looper.Ping:input_type -> looper.v1.PingRequest
+	6,  // 4: looper.v1.Looper.Shutdown:input_type -> looper.v1.ShutdownRequest
+	8,  // 5: looper.v1.Looper.StartLoop:input_type -> looper.v1.StartLoopRequest
+	10, // 6: looper.v1.Looper.StopLoop:input_type -> looper.v1.StopLoopRequest
+	12, // 7: looper.v1.Looper.ListRuns:input_type -> looper.v1.ListRunsRequest
+	15, // 8: looper.v1.Looper.StreamState:input_type -> looper.v1.StreamStateRequest
+	17, // 9: looper.v1.Looper.RespondDecision:input_type -> looper.v1.RespondDecisionRequest
+	0,  // 10: looper.v1.Looper.Attach:input_type -> looper.v1.AttachInput
+	5,  // 11: looper.v1.Looper.Ping:output_type -> looper.v1.PingResponse
+	7,  // 12: looper.v1.Looper.Shutdown:output_type -> looper.v1.ShutdownResponse
+	9,  // 13: looper.v1.Looper.StartLoop:output_type -> looper.v1.StartLoopResponse
+	11, // 14: looper.v1.Looper.StopLoop:output_type -> looper.v1.StopLoopResponse
+	14, // 15: looper.v1.Looper.ListRuns:output_type -> looper.v1.ListRunsResponse
+	16, // 16: looper.v1.Looper.StreamState:output_type -> looper.v1.StateUpdate
+	18, // 17: looper.v1.Looper.RespondDecision:output_type -> looper.v1.RespondDecisionResponse
+	3,  // 18: looper.v1.Looper.Attach:output_type -> looper.v1.AttachOutput
+	11, // [11:19] is the sub-list for method output_type
+	3,  // [3:11] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_proto_looper_proto_init() }
@@ -903,13 +1162,18 @@ func file_proto_looper_proto_init() {
 	if File_proto_looper_proto != nil {
 		return
 	}
+	file_proto_looper_proto_msgTypes[0].OneofWrappers = []any{
+		(*AttachInput_Start)(nil),
+		(*AttachInput_Data)(nil),
+		(*AttachInput_Resize)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_looper_proto_rawDesc), len(file_proto_looper_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -121,6 +121,25 @@ func (s *Session) setLive(w io.Writer) {
 	s.live = w
 }
 
+// PipeTo taps the session's output for a remote attach: it writes the
+// current Scrollback() to w, then makes w the live writer that the reader
+// goroutine tees subsequent output to. If a live writer is already set (e.g.
+// a local Attach or an earlier PipeTo), PipeTo replaces it — only one live
+// writer is supported at a time. The returned stop func clears the live
+// writer; it is idempotent and safe to call multiple times, but note it
+// unconditionally clears whatever live writer is set when called, even if a
+// later PipeTo/Attach has since replaced it.
+func (s *Session) PipeTo(w io.Writer) (stop func()) {
+	// A write error here doesn't prevent tapping live output; a caller whose
+	// w stays broken will simply see no output at all, which is its own
+	// signal.
+	_, _ = w.Write(s.Scrollback())
+	s.setLive(w)
+	return func() {
+		s.setLive(nil)
+	}
+}
+
 // Resize sets the pty's window size.
 func (s *Session) Resize(rows, cols uint16) error {
 	if err := creackpty.Setsize(s.ptmx, &creackpty.Winsize{Rows: rows, Cols: cols}); err != nil {

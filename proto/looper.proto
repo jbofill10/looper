@@ -21,7 +21,26 @@ service Looper {
   rpc StreamState(StreamStateRequest) returns (stream StateUpdate);
   // RespondDecision answers a pending decision request (manual step, failure).
   rpc RespondDecision(RespondDecisionRequest) returns (RespondDecisionResponse);
+
+  // Attach opens a bidirectional stream to a run's live interactive session:
+  // the client sends stdin bytes and resize events; the server streams the
+  // session's terminal output.
+  rpc Attach(stream AttachInput) returns (stream AttachOutput);
 }
+
+message AttachInput {
+  oneof msg {
+    AttachStart start = 1; // MUST be the first message
+    bytes data = 2;        // stdin bytes
+    Resize resize = 3;     // terminal resize
+  }
+}
+message AttachStart { string run_id = 1; }
+message Resize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+message AttachOutput { bytes data = 1; }
 
 message PingRequest {}
 message PingResponse { string version = 1; }
