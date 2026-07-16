@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -285,5 +286,109 @@ func TestView_FleetFooterMentionsNewLoopKey(t *testing.T) {
 	m := twoWorkerModel()
 	if !strings.Contains(m.View(), "[n] new loop") {
 		t.Fatalf("fleet footer missing new-loop hint:\n%s", m.View())
+	}
+}
+
+func TestView_FleetShowsLoopsSection(t *testing.T) {
+	m := NewModel(Options{})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "jira-tracker", Enabled: true, Steps: []string{"s1"}}})
+	m = next.(Model)
+
+	out := m.View()
+	if !strings.Contains(out, "Loops") || !strings.Contains(out, "jira-tracker") || !strings.Contains(out, "[on]") {
+		t.Errorf("View() = %q, want a Loops section listing jira-tracker as [on]", out)
+	}
+}
+
+func TestView_ToggleEnabledKeyInvokesSetLoopEnabledFn(t *testing.T) {
+	var gotName string
+	var gotEnabled bool
+	m := NewModel(Options{
+		SetLoopEnabledFn: func(name string, enabled bool) tea.Cmd {
+			gotName, gotEnabled = name, enabled
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", Enabled: false}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // loop-row keys require the Loops tree focused
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	if gotName != "a" || gotEnabled != true {
+		t.Errorf("SetLoopEnabledFn called with (%q, %v), want (\"a\", true)", gotName, gotEnabled)
+	}
+}
+
+func TestView_RunOnceKeyInvokesRunLoopOnceFn(t *testing.T) {
+	var got string
+	m := NewModel(Options{RunLoopOnceFn: func(name string) tea.Cmd { got = name; return nil }})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a"}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got != "a" {
+		t.Errorf("RunLoopOnceFn called with %q, want \"a\"", got)
+	}
+}
+
+func TestView_GracefulAndHardStopKeysOnlyActWithAnActiveRun(t *testing.T) {
+	var gracefulCalled, abortCalled bool
+	m := NewModel(Options{
+		StopLoopGracefulFn: func(runID string) tea.Cmd { gracefulCalled = true; return nil },
+		AbortLoopFn:        func(runID string) tea.Cmd { abortCalled = true; return nil },
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a"}}) // no RunID: not running
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if gracefulCalled || abortCalled {
+		t.Errorf("graceful/hard stop must be no-ops on a non-running loop")
+	}
+
+	next, _ = m.Update(LoopsSnapshotMsg{{Name: "a", RunID: "run-001"}}) // loopsFocused survives this update
+	m = next.(Model)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	if !gracefulCalled {
+		t.Errorf("'g' on a running loop must call StopLoopGracefulFn")
+	}
+}
+
+func TestView_ExpandedLoopForwardsCreateStepKeyToEmbeddedBuilder(t *testing.T) {
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	loopPath := filepath.Join(loopsDir, "a.yaml")
+	if err := os.WriteFile(loopPath, []byte("name: a\nsteps: []\n"), 0o644); err != nil {
+		t.Fatalf("write loop: %v", err)
+	}
+
+	var authorReq builder.AuthorRequest
+	m := NewModel(Options{
+		ProjectDir: dir,
+		AuthorFn: func(req builder.AuthorRequest) tea.Cmd {
+			authorReq = req
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", Path: loopPath, Steps: nil}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus the Loops tree
+	m = next.(Model)
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace}) // expand
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")}) // create-step
+	m = next.(Model)
+
+	if authorReq.LoopPath != loopPath {
+		t.Errorf("AuthorFn called with LoopPath %q, want %q (create-step key must forward to the expanded loop's embedded builder)", authorReq.LoopPath, loopPath)
 	}
 }

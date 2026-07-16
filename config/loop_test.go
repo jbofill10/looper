@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,5 +157,28 @@ func TestStepValidate_InvalidCases(t *testing.T) {
 				t.Fatalf("expected error for %q, got nil", label)
 			}
 		})
+	}
+}
+
+func TestLoadLoopLenient_AllowsZeroStepsAndMissingFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "l.yaml")
+	if err := os.WriteFile(path, []byte("name: l\nsteps: []\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	loop, err := LoadLoopLenient(path)
+	if err != nil {
+		t.Fatalf("LoadLoopLenient: %v", err)
+	}
+	if loop.Name != "l" || len(loop.Steps) != 0 {
+		t.Errorf("loop = %+v, want Name=l Steps=[]", loop)
+	}
+}
+
+func TestLoadLoopLenient_MissingFileReturnsNotExist(t *testing.T) {
+	_, err := LoadLoopLenient(filepath.Join(t.TempDir(), "missing.yaml"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v, want wrapping os.ErrNotExist", err)
 	}
 }

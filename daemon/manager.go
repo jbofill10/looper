@@ -124,6 +124,12 @@ type runEntry struct {
 	workersRemaining int
 	firstErr         error // first non-cancellation error from any worker
 
+	baseDir string // the .looper dir this run was started from
+	workdir string // execution dir this run was started from
+
+	graceful     chan struct{}
+	gracefulOnce sync.Once
+
 	sessMu  sync.Mutex
 	session *pty.Session // the run's live interactive session, if any
 }
@@ -169,6 +175,14 @@ type Manager struct {
 	runs      map[string]*runEntry
 	subs      map[int]*subscriber
 	nextSubID int
+
+	registryPath string
+	// registryMu serializes the registry's load-mutate-save sequence used
+	// by SetLoopEnabled, RenameLoop, DeleteLoop, and AutoResume, so two
+	// concurrent calls (e.g. toggling two different loops at once) can't
+	// race and have one write clobber the other. It guards only the
+	// registry file, not m.runs/m.subs — do not conflate the two locks.
+	registryMu sync.Mutex
 }
 
 // NewManager returns a Manager for orchestrating loops. A nil global uses
@@ -178,13 +192,21 @@ func NewManager(global *config.Global, looperBin string) *Manager {
 		global = config.DefaultGlobal()
 	}
 	return &Manager{
-		global:    global,
-		looperBin: looperBin,
-		newID:     newCounter("run"),
-		newReqID:  newCounter("req"),
-		runs:      map[string]*runEntry{},
-		subs:      map[int]*subscriber{},
+		global:       global,
+		looperBin:    looperBin,
+		newID:        newCounter("run"),
+		newReqID:     newCounter("req"),
+		runs:         map[string]*runEntry{},
+		subs:         map[int]*subscriber{},
+		registryPath: defaultRegistryPath(),
 	}
+}
+
+// SetRegistryPath overrides the daemon-wide enabled-loops registry path
+// (defaultRegistryPath() otherwise). Tests use this to avoid touching the
+// real per-user registry file.
+func (m *Manager) SetRegistryPath(path string) {
+	m.registryPath = path
 }
 
 // newCounter returns a mutex-guarded id generator producing
@@ -242,6 +264,9 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string, concurr
 		pending:          map[string]*pendingRequest{},
 		workers:          map[string]*workerState{},
 		workersRemaining: n,
+		baseDir:          baseDir,
+		workdir:          workdir,
+		graceful:         make(chan struct{}),
 	}
 	m.runs[runID] = re
 	m.mu.Unlock()
@@ -262,16 +287,17 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string, concurr
 
 		prompter := &remotePrompter{mgr: m, runID: runID, ctx: ctx, workerID: workerID}
 		w := &runner.Worker{
-			Loop:        loop,
-			BaseDir:     baseDir,
-			Workdir:     workdir,
-			Prompter:    prompter,
-			Global:      m.global,
-			LooperBin:   m.looperBin,
-			Ctx:         ctx,
-			ID:          workerID,
-			TaskVar:     loop.TaskVar,
-			AcquireLock: acquireLock,
+			Loop:         loop,
+			BaseDir:      baseDir,
+			Workdir:      workdir,
+			Prompter:     prompter,
+			Global:       m.global,
+			LooperBin:    m.looperBin,
+			Ctx:          ctx,
+			ID:           workerID,
+			TaskVar:      loop.TaskVar,
+			AcquireLock:  acquireLock,
+			GracefulStop: re.graceful,
 			InteractiveRun: func(argv, env []string, socketPath string) error {
 				return m.runInteractiveSession(ctx, re, runID, argv, env)
 			},
@@ -358,6 +384,23 @@ func (m *Manager) StopLoop(runID string) error {
 		return fmt.Errorf("no such run %q", runID)
 	}
 	re.cancel()
+	return nil
+}
+
+// StopLoopGraceful signals the run's workers to finish their current
+// iteration and then stop, without cancelling the run's context — unlike
+// StopLoop, an in-flight step is not interrupted. The run's final status
+// becomes "done" once every worker returns (a graceful stop is a normal
+// end of run, not an error or cancellation). Calling it more than once for
+// the same run is a no-op.
+func (m *Manager) StopLoopGraceful(runID string) error {
+	m.mu.Lock()
+	re, ok := m.runs[runID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no such run %q", runID)
+	}
+	re.gracefulOnce.Do(func() { close(re.graceful) })
 	return nil
 }
 

@@ -34,7 +34,9 @@ func writeLoopFile(t *testing.T, dir string, loop *config.Loop) string {
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	return NewManager(nil, "looper")
+	m := NewManager(nil, "looper")
+	m.SetRegistryPath(filepath.Join(t.TempDir(), "state.json"))
+	return m
 }
 
 func recvUpdate(t *testing.T, ch <-chan Update) Update {
@@ -60,6 +62,41 @@ func drainUntilRunDone(t *testing.T, ch <-chan Update) []Update {
 		if u.Kind == "run_done" {
 			return got
 		}
+	}
+}
+
+func TestManager_StopLoopGracefulFinishesCurrentIterationThenStops(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:  "l",
+		Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	path := writeLoopFile(t, dir, loop)
+
+	m := newTestManager(t)
+	ch, unsub := m.Subscribe("")
+	defer unsub()
+
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	// Wait for iteration 1's outcome, then request a graceful stop.
+	for {
+		u := recvUpdate(t, ch)
+		if u.Kind == "outcome" {
+			break
+		}
+	}
+	if err := m.StopLoopGraceful(runID); err != nil {
+		t.Fatalf("StopLoopGraceful: %v", err)
+	}
+
+	updates := drainUntilRunDone(t, ch)
+	last := updates[len(updates)-1]
+	if last.State != "done" {
+		t.Errorf("final state = %q, want %q (graceful stop is a normal completion, not stopped/error)", last.State, "done")
 	}
 }
 

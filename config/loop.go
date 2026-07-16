@@ -67,6 +67,24 @@ func LoadLoop(path string) (*Loop, error) {
 	return &l, nil
 }
 
+// LoadLoopLenient reads and YAML-parses the loop file at path without
+// requiring it to pass Validate (which rejects a whole file over a single
+// invalid step, or zero steps). Per-step/whole-loop validity is instead a
+// caller concern (e.g. the builder's per-step error surfacing, or the
+// Loops catalog showing a mid-edit loop rather than hiding it). Returns an
+// error wrapping os.ErrNotExist if the file doesn't exist.
+func LoadLoopLenient(path string) (*Loop, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read loop file %q: %w", path, err)
+	}
+	var l Loop
+	if err := yaml.Unmarshal(data, &l); err != nil {
+		return nil, fmt.Errorf("parse loop file %q: %w", path, err)
+	}
+	return &l, nil
+}
+
 // SaveLoop validates l, then marshals it to YAML and writes it to path,
 // creating any missing parent directories. It re-validates before writing
 // so it never produces a loop file that fails config.Loop.Validate(); on a

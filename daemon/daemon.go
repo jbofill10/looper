@@ -94,3 +94,10 @@ func (s *Server) Stop() {
 		gs.GracefulStop()
 	}
 }
+
+// AutoResume starts every registry entry marked enabled. Called once by
+// the `looper daemon` command right before Serve, so a freshly (re)started
+// daemon picks back up whatever loops were enabled before it last stopped.
+func (s *Server) AutoResume() []error {
+	return s.manager.AutoResume()
+}

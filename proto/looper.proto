@@ -22,6 +22,22 @@ service Looper {
   // RespondDecision answers a pending decision request (manual step, failure).
   rpc RespondDecision(RespondDecisionRequest) returns (RespondDecisionResponse);
 
+  // ListLoops lists every loop configured under base_dir, with its
+  // enabled/running state.
+  rpc ListLoops(ListLoopsRequest) returns (ListLoopsResponse);
+  // SetLoopEnabled persists a loop's enabled flag and starts/gracefully
+  // stops its run accordingly.
+  rpc SetLoopEnabled(SetLoopEnabledRequest) returns (SetLoopEnabledResponse);
+  // RunLoopOnce starts a loop as a one-off run (max_iterations forced to 1).
+  rpc RunLoopOnce(RunLoopOnceRequest) returns (RunLoopOnceResponse);
+  // StopLoopGraceful lets a run's in-flight iteration finish, then stops it
+  // before the next iteration (unlike StopLoop, does not cancel mid-step).
+  rpc StopLoopGraceful(StopLoopGracefulRequest) returns (StopLoopGracefulResponse);
+  // RenameLoop renames a loop's file and registry entry.
+  rpc RenameLoop(RenameLoopRequest) returns (RenameLoopResponse);
+  // DeleteLoop deletes a loop's file and registry entry.
+  rpc DeleteLoop(DeleteLoopRequest) returns (DeleteLoopResponse);
+
   // Attach opens a bidirectional stream to a run's live interactive session:
   // the client sends stdin bytes and resize events; the server streams the
   // session's terminal output.
@@ -104,3 +120,45 @@ message RespondDecisionRequest {
   string outcome = 3; // advance | retry | abort
 }
 message RespondDecisionResponse {}
+
+message ListLoopsRequest { string base_dir = 1; }
+message LoopInfo {
+  string name = 1;
+  string path = 2;
+  bool enabled = 3;
+  repeated string steps = 4;
+  string run_id = 5; // active run id, empty if not running
+}
+message ListLoopsResponse { repeated LoopInfo loops = 1; }
+
+message SetLoopEnabledRequest {
+  string loop_name = 1;
+  string base_dir = 2;
+  string workdir = 3;
+  bool enabled = 4;
+}
+message SetLoopEnabledResponse { string run_id = 1; } // empty if disabling an already-stopped loop
+
+message RunLoopOnceRequest {
+  string loop_name = 1;
+  string loop_file = 2;
+  string base_dir = 3;
+  string workdir = 4;
+}
+message RunLoopOnceResponse { string run_id = 1; }
+
+message StopLoopGracefulRequest { string run_id = 1; }
+message StopLoopGracefulResponse {}
+
+message RenameLoopRequest {
+  string loop_name = 1;
+  string new_name = 2;
+  string base_dir = 3;
+}
+message RenameLoopResponse {}
+
+message DeleteLoopRequest {
+  string loop_name = 1;
+  string base_dir = 2;
+}
+message DeleteLoopResponse {}
