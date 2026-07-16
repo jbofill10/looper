@@ -10,14 +10,66 @@ service Looper {
   rpc Ping(PingRequest) returns (PingResponse);
   // Shutdown asks the daemon to stop gracefully.
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+
+  // StartLoop starts running a loop in the daemon and returns its run id.
+  rpc StartLoop(StartLoopRequest) returns (StartLoopResponse);
+  // StopLoop stops a running loop.
+  rpc StopLoop(StopLoopRequest) returns (StopLoopResponse);
+  // ListRuns returns the current runs known to the daemon.
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+  // StreamState streams state updates for a run (or all runs if run_id empty).
+  rpc StreamState(StreamStateRequest) returns (stream StateUpdate);
+  // RespondDecision answers a pending decision request (manual step, failure).
+  rpc RespondDecision(RespondDecisionRequest) returns (RespondDecisionResponse);
 }
 
 message PingRequest {}
-
-message PingResponse {
-  string version = 1;
-}
+message PingResponse { string version = 1; }
 
 message ShutdownRequest {}
-
 message ShutdownResponse {}
+
+message StartLoopRequest {
+  string loop_name = 1; // resolved under base_dir/loops/<name>.yaml if loop_file empty
+  string loop_file = 2; // explicit loop file (overrides loop_name)
+  string base_dir = 3;  // the .looper dir
+  string workdir = 4;   // execution dir
+}
+message StartLoopResponse { string run_id = 1; }
+
+message StopLoopRequest { string run_id = 1; }
+message StopLoopResponse {}
+
+message ListRunsRequest {}
+message RunInfo {
+  string run_id = 1;
+  string loop_name = 2;
+  string status = 3;       // running | done | stopped | error
+  int32 iteration = 4;
+  string current_step = 5;
+  string state = 6;
+  string error = 7;
+}
+message ListRunsResponse { repeated RunInfo runs = 1; }
+
+message StreamStateRequest { string run_id = 1; } // empty = all runs
+
+// StateUpdate is one event on a run's state stream.
+message StateUpdate {
+  string run_id = 1;
+  string kind = 2;        // step_start | state | decision_request | run_done | log
+  string loop_name = 3;
+  int32 iteration = 4;
+  string step = 5;
+  string state = 6;
+  string message = 7;
+  string request_id = 8;      // set when kind == decision_request
+  repeated string options = 9; // e.g. ["advance","retry","abort"]
+}
+
+message RespondDecisionRequest {
+  string run_id = 1;
+  string request_id = 2;
+  string outcome = 3; // advance | retry | abort
+}
+message RespondDecisionResponse {}
