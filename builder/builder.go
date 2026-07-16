@@ -1,135 +1,184 @@
-// Package builder implements a guided, single-page Bubble Tea form for
-// creating or editing a looper loop definition. Model is pure: it never
-// performs file or network I/O itself. Enum-like fields (step type,
-// harness, on_fail) are selects cycled with left/right rather than typed;
-// free-text fields are edited directly in Update on tea.KeyMsg (no bubbles
-// dependency), which keeps the whole form fully unit-testable by feeding
-// synthetic key messages. The one side-effecting capability the form
-// exposes — launching an interactive harness session to draft a script
-// step's contents — is invoked via an injected Options.DraftFn, mirroring
-// how tui.Model injects RespondFn/AttachFn to stay pure itself.
+// Package builder implements a file-backed Bubble Tea list view over a
+// looper loop's steps. The loop's YAML file on disk is the source of
+// truth at all times: Model reloads from it after every interactive
+// authoring session and applies delete/reorder directly to it, rather
+// than assembling a Loop in memory to save once at the end. The one
+// side-effecting capability the view exposes — launching an interactive
+// claude session to create or edit a step — is invoked via an injected
+// Options.AuthorFn, mirroring how tui.Model injects RespondFn/AttachFn to
+// stay pure itself.
 package builder
 
 import (
+	"errors"
 	"fmt"
-	"sort"
-	"strconv"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/style"
 )
 
-// fieldID identifies one field or action on the single-page form.
-type fieldID int
-
-const (
-	fName fieldID = iota
-	fConcurrency
-	fStepName
-	fStepType
-	fStepRun
-	fDraft
-	fStepPrompt
-	fStepHarness
-	fStepOutputs
-	fStepOnFail
-	fAddStep
-	fFinish
-)
-
-// stepTypeOptions and onFailOptions define the select fields' cycling
-// order; their string labels are used both for display and as the typed
-// value once selected.
-var (
-	stepTypeOptions = []config.StepType{config.StepScript, config.StepHeadless, config.StepInteractive, config.StepManual}
-	onFailOptions   = []config.OnFail{config.OnFailAsk, config.OnFailRetry, config.OnFailAbort}
-)
-
-// DraftRequest carries the preliminary context available at the moment the
-// user asks to draft a script step's contents with a live harness session:
-// the loop's name, the step being drafted, and the steps already added.
-type DraftRequest struct {
-	LoopName   string
-	StepName   string
-	PriorSteps []config.Step
+// AuthorRequest carries the context an Options.AuthorFn needs to launch a
+// step-authoring session: the project directory and loop file path to run
+// it against, which step to edit (blank means create a new one), and that
+// step's current validation error, if any.
+type AuthorRequest struct {
+	ProjectDir    string
+	LoopPath      string
+	StepName      string
+	ValidationErr error
 }
 
-// DraftedMsg reports the outcome of a draft session requested via
-// Options.DraftFn: on success Content holds the drafted script text; on
-// failure Err is set instead.
-type DraftedMsg struct {
-	Content string
-	Err     error
+// SessionDoneMsg reports that an authoring session invoked via
+// Options.AuthorFn has exited (the user detached). Err is set only if the
+// session itself failed to start or run (not for the edited file failing
+// validation — that's surfaced via StepErrors after the reload Update
+// performs on receipt of this message).
+type SessionDoneMsg struct {
+	Err error
 }
 
 // Options configures the builder's one side-effecting hook.
 type Options struct {
-	// DraftFn, if set, is invoked when the user requests an interactive
-	// harness session to draft a script step's contents (ctrl+d while a
-	// script step is being edited). It returns a tea.Cmd that performs the
-	// actual session and yields a DraftedMsg.
-	DraftFn func(DraftRequest) tea.Cmd
+	// AuthorFn, if set, is invoked when the user requests a step-authoring
+	// session (create-step or edit-step). It returns a tea.Cmd that
+	// performs the actual session and yields a SessionDoneMsg.
+	AuthorFn func(AuthorRequest) tea.Cmd
 }
 
-// Model is the Bubble Tea model driving the guided loop builder's
-// single-page form.
+// Model is the Bubble Tea model driving the file-backed step list.
 type Model struct {
 	opts Options
-	pre  *config.Loop
 
-	name        string
-	concurrency string // raw text buffer; parsed on finish
+	projectDir string
+	loopPath   string
 
-	steps []config.Step
+	loop       *config.Loop
+	stepErrors map[string]error
 
-	// curX buffers hold the step currently being edited, added to steps by
-	// the fAddStep action.
-	curName       string
-	curTypeIdx    int
-	curRun        string
-	curPrompt     string
-	curHarnessIdx int
-	curOutputs    string
-	curOnFailIdx  int
-
-	harnessOptions []string // harnessOptions[0] is always "(default)"
-
-	focus    fieldID
-	done     bool
-	drafting bool
-	errMsg   string
-
-	concurrencyN int
+	cursor    int
+	authoring bool
+	quit      bool
+	errMsg    string
 }
 
-// New returns a Model ready to guide the user through building a loop on a
-// single page. harnessNames lists the configured harnesses (for the
-// per-step harness select field; sorted for a stable order); it need not
-// include a blank/default entry, New adds one. If existing is non-nil, the
-// form is pre-populated from it, so editing a loop preserves its existing
-// fields unless the user changes them.
-func New(existing *config.Loop, harnessNames []string, opts Options) Model {
-	names := append([]string{}, harnessNames...)
-	sort.Strings(names)
-	harnessOptions := append([]string{"(default)"}, names...)
+// New loads the loop at loopPath, or, if it doesn't exist yet, writes a
+// minimal skeleton there first (name derived from loopPath's base name,
+// empty steps) before loading it. projectDir is the working directory a
+// step-authoring session is launched in.
+//
+// Loading (both here and on SessionDoneMsg reload) intentionally does not
+// go through config.LoadLoop's strict, whole-loop Validate: an authoring
+// session may leave the file in a state where one step is incomplete
+// (e.g. a freshly created interactive step with no prompt yet), and the
+// builder's whole purpose is to keep showing that file's steps — flagging
+// the bad one via StepErrors — rather than refusing to load it at all.
+func New(projectDir, loopPath string, opts Options) (Model, error) {
+	loop, err := loadLoopLenient(loopPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return Model{}, fmt.Errorf("load loop: %w", err)
+		}
+		skeleton := &config.Loop{Name: loopName(loopPath), Steps: []config.Step{}}
+		if saveErr := writeLoopFile(skeleton, loopPath); saveErr != nil {
+			return Model{}, fmt.Errorf("write new loop skeleton: %w", saveErr)
+		}
+		loop = skeleton
+	}
 
 	m := Model{
-		opts:           opts,
-		focus:          fName,
-		harnessOptions: harnessOptions,
+		opts:       opts,
+		projectDir: projectDir,
+		loopPath:   loopPath,
+		loop:       loop,
 	}
-	if existing != nil {
-		m.pre = existing
-		m.name = existing.Name
-		if existing.Concurrency > 0 {
-			m.concurrency = strconv.Itoa(existing.Concurrency)
+	m.revalidate()
+	return m, nil
+}
+
+// loadLoopLenient reads and parses the loop file at path without
+// requiring it to pass config.Loop.Validate (which rejects the whole file
+// on any single invalid step, or on having zero steps). Per-step validity
+// is instead computed independently via revalidate/StepErrors, so a
+// partially invalid file still loads and displays.
+func loadLoopLenient(path string) (*config.Loop, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var l config.Loop
+	if err := yaml.Unmarshal(data, &l); err != nil {
+		return nil, fmt.Errorf("parse loop file %q: %w", path, err)
+	}
+	return &l, nil
+}
+
+// writeLoopFile marshals l to YAML and writes it to path, creating any
+// missing parent directories, without requiring l to pass Validate. It's
+// used only for the initial skeleton, which deliberately has zero steps.
+func writeLoopFile(l *config.Loop, path string) error {
+	data, err := yaml.Marshal(l)
+	if err != nil {
+		return fmt.Errorf("marshal loop: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create loop directory: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write loop file: %w", err)
+	}
+	return nil
+}
+
+// loopName derives a loop's name from its file path: the base name
+// without a .yaml/.yml extension.
+func loopName(loopPath string) string {
+	base := loopPath
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(base, ".yaml")
+	base = strings.TrimSuffix(base, ".yml")
+	return base
+}
+
+// Steps returns the current in-memory step list (as of the last load).
+func (m Model) Steps() []config.Step {
+	return m.loop.Steps
+}
+
+// StepErrors returns the current per-step validation errors, keyed by
+// step name, as of the last reload.
+func (m Model) StepErrors() map[string]error {
+	return m.stepErrors
+}
+
+// Path returns the loop file path this model is backed by.
+func (m Model) Path() string {
+	return m.loopPath
+}
+
+// Quit reports whether the user has requested to leave the builder.
+func (m Model) Quit() bool {
+	return m.quit
+}
+
+// revalidate recomputes m.stepErrors from m.loop.Steps by calling
+// (*config.Step).Validate() on each, independent of the others.
+func (m *Model) revalidate() {
+	errs := map[string]error{}
+	for i := range m.loop.Steps {
+		s := &m.loop.Steps[i]
+		if err := s.Validate(); err != nil {
+			errs[s.Name] = err
 		}
-		m.steps = append([]config.Step{}, existing.Steps...)
 	}
-	return m
+	m.stepErrors = errs
 }
 
 // Init implements tea.Model. The builder has no initial command.
@@ -140,14 +189,28 @@ func (m Model) Init() tea.Cmd {
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case DraftedMsg:
-		m.drafting = false
+	case SessionDoneMsg:
+		m.authoring = false
 		if msg.Err != nil {
-			m.errMsg = fmt.Sprintf("draft session failed: %v", msg.Err)
-		} else {
-			m.curRun = strings.TrimRight(msg.Content, "\n")
-			m.errMsg = ""
+			m.errMsg = fmt.Sprintf("authoring session failed: %v", msg.Err)
+			return m, nil
 		}
+		reloaded, err := loadLoopLenient(m.loopPath)
+		if err != nil {
+			// The file may be mid-edit and momentarily invalid; keep the
+			// last good in-memory copy but surface the reload error.
+			m.errMsg = fmt.Sprintf("reload after session: %v", err)
+			return m, nil
+		}
+		m.loop = reloaded
+		if m.cursor >= len(m.loop.Steps) {
+			m.cursor = len(m.loop.Steps) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		m.revalidate()
+		m.errMsg = ""
 		return m, nil
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -155,433 +218,112 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleKey implements the single-page form's keyboard handling: tab/down
-// and shift+tab/up move focus among the currently visible fields, left and
-// right cycle a focused select field's value, enter confirms/advances (or
-// triggers an action field), backspace and printable runes edit a focused
-// text field, and ctrl+d requests a draft session for a script step's Run
-// field regardless of current focus.
+// handleKey implements the step list's keyboard handling: up/k and
+// down/j move the cursor, c requests a create-step session, e requests an
+// edit-step session for the selected step, d deletes the selected step
+// (rewriting the file directly, no session), and q requests to quit.
 func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "tab", "down":
-		m.focus = m.adjacentFocus(1)
-		return m, nil
-	case "shift+tab", "up":
-		m.focus = m.adjacentFocus(-1)
-		return m, nil
-	case "left":
-		m.cycleSelect(m.focus, -1)
-		return m, nil
-	case "right":
-		m.cycleSelect(m.focus, 1)
-		return m, nil
-	case "ctrl+d":
-		return m.requestDraft()
-	case "enter":
-		return m.commitFocused()
-	case "backspace":
-		if p := m.textPtr(m.focus); p != nil {
-			if r := []rune(*p); len(r) > 0 {
-				*p = string(r[:len(r)-1])
-			}
-		}
+	if m.authoring {
 		return m, nil
 	}
-
-	if key.Type == tea.KeyRunes {
-		if p := m.textPtr(m.focus); p != nil {
-			*p += string(key.Runes)
+	switch key.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
 		}
+		return m, nil
+	case "down", "j":
+		if m.cursor < len(m.loop.Steps)-1 {
+			m.cursor++
+		}
+		return m, nil
+	case "c":
+		return m.requestAuthor("")
+	case "e":
+		if len(m.loop.Steps) == 0 {
+			return m, nil
+		}
+		return m.requestAuthor(m.loop.Steps[m.cursor].Name)
+	case "d":
+		return m.deleteSelected()
+	case "q":
+		m.quit = true
+		return m, nil
 	}
 	return m, nil
 }
 
-// commitFocused handles an enter keypress on the focused field: on a
-// select field it cycles forward (same as right, for discoverability); on
-// fDraft it requests a draft session; on fAddStep it commits the
-// in-progress step; on fFinish it finalizes the loop; on a text field it
-// simply advances focus, matching tab.
-func (m Model) commitFocused() (tea.Model, tea.Cmd) {
-	switch m.focus {
-	case fDraft:
-		return m.requestDraft()
-	case fAddStep:
-		m.addStep()
-		return m, nil
-	case fFinish:
-		m.finish()
-		return m, nil
-	case fStepType, fStepHarness, fStepOnFail:
-		m.cycleSelect(m.focus, 1)
-		return m, nil
-	default:
-		m.focus = m.adjacentFocus(1)
+// requestAuthor invokes Options.AuthorFn for a create (stepName == "") or
+// edit (stepName set) session, including the selected step's current
+// validation error for an edit request.
+func (m Model) requestAuthor(stepName string) (tea.Model, tea.Cmd) {
+	if m.opts.AuthorFn == nil || m.authoring {
 		return m, nil
 	}
-}
-
-// requestDraft invokes Options.DraftFn for the step currently being
-// edited, if it is a script step and a session isn't already running.
-func (m Model) requestDraft() (tea.Model, tea.Cmd) {
-	if stepTypeOptions[m.curTypeIdx] != config.StepScript || m.opts.DraftFn == nil || m.drafting {
-		return m, nil
-	}
-	m.drafting = true
+	m.authoring = true
 	m.errMsg = ""
-	req := DraftRequest{
-		LoopName:   strings.TrimSpace(m.name),
-		StepName:   strings.TrimSpace(m.curName),
-		PriorSteps: append([]config.Step{}, m.steps...),
+	req := AuthorRequest{
+		ProjectDir:    m.projectDir,
+		LoopPath:      m.loopPath,
+		StepName:      stepName,
+		ValidationErr: m.stepErrors[stepName],
 	}
-	return m, m.opts.DraftFn(req)
+	return m, m.opts.AuthorFn(req)
 }
 
-// visibleFields returns, in display order, the fields relevant to the step
-// type currently selected in the in-progress step editor.
-func (m Model) visibleFields() []fieldID {
-	fields := []fieldID{fName, fConcurrency, fStepName, fStepType}
-	switch stepTypeOptions[m.curTypeIdx] {
-	case config.StepScript:
-		fields = append(fields, fStepRun, fDraft)
-	case config.StepHeadless, config.StepInteractive:
-		fields = append(fields, fStepPrompt, fStepHarness)
+// deleteSelected removes the selected step from the loop and saves it
+// directly, with no authoring session involved.
+func (m Model) deleteSelected() (tea.Model, tea.Cmd) {
+	if len(m.loop.Steps) == 0 {
+		return m, nil
 	}
-	fields = append(fields, fStepOutputs)
-	switch stepTypeOptions[m.curTypeIdx] {
-	case config.StepScript, config.StepHeadless:
-		fields = append(fields, fStepOnFail)
+	next := append([]config.Step{}, m.loop.Steps[:m.cursor]...)
+	next = append(next, m.loop.Steps[m.cursor+1:]...)
+	updated := *m.loop
+	updated.Steps = next
+	if err := config.SaveLoop(&updated, m.loopPath); err != nil {
+		m.errMsg = fmt.Sprintf("delete step: %v", err)
+		return m, nil
 	}
-	return append(fields, fAddStep, fFinish)
-}
-
-// adjacentFocus returns the visible field delta positions away from the
-// current focus, wrapping around the ends.
-func (m Model) adjacentFocus(delta int) fieldID {
-	fields := m.visibleFields()
-	cur := 0
-	for i, f := range fields {
-		if f == m.focus {
-			cur = i
-			break
-		}
+	m.loop = &updated
+	if m.cursor >= len(m.loop.Steps) {
+		m.cursor = len(m.loop.Steps) - 1
 	}
-	n := len(fields)
-	next := ((cur+delta)%n + n) % n
-	return fields[next]
-}
-
-// textPtr returns a pointer to the focused text field's buffer, or nil if
-// id is not a text field.
-func (m *Model) textPtr(id fieldID) *string {
-	switch id {
-	case fName:
-		return &m.name
-	case fConcurrency:
-		return &m.concurrency
-	case fStepName:
-		return &m.curName
-	case fStepRun:
-		return &m.curRun
-	case fStepPrompt:
-		return &m.curPrompt
-	case fStepOutputs:
-		return &m.curOutputs
+	if m.cursor < 0 {
+		m.cursor = 0
 	}
-	return nil
-}
-
-// selectIdxPtr returns a pointer to the focused select field's option
-// index, or nil if id is not a select field.
-func (m *Model) selectIdxPtr(id fieldID) *int {
-	switch id {
-	case fStepType:
-		return &m.curTypeIdx
-	case fStepHarness:
-		return &m.curHarnessIdx
-	case fStepOnFail:
-		return &m.curOnFailIdx
-	}
-	return nil
-}
-
-// selectOptions returns the display labels for a select field.
-func (m Model) selectOptions(id fieldID) []string {
-	switch id {
-	case fStepType:
-		return stepTypeLabels()
-	case fStepHarness:
-		return m.harnessOptions
-	case fStepOnFail:
-		return onFailLabels()
-	}
-	return nil
-}
-
-// cycleSelect advances id's option index by delta, wrapping around. It is
-// a no-op if id is not a select field.
-func (m *Model) cycleSelect(id fieldID, delta int) {
-	idx := m.selectIdxPtr(id)
-	if idx == nil {
-		return
-	}
-	n := len(m.selectOptions(id))
-	*idx = ((*idx+delta)%n + n) % n
-}
-
-// addStep validates and appends the in-progress step to m.steps, then
-// clears the step editor buffers. On a validation failure it sets errMsg
-// and moves focus to the offending field, leaving the buffers untouched.
-func (m *Model) addStep() {
-	name := strings.TrimSpace(m.curName)
-	if name == "" {
-		m.errMsg = "step name is required"
-		m.focus = fStepName
-		return
-	}
-	for _, s := range m.steps {
-		if s.Name == name {
-			m.errMsg = fmt.Sprintf("duplicate step name %q", name)
-			m.focus = fStepName
-			return
-		}
-	}
-
-	t := stepTypeOptions[m.curTypeIdx]
-	step := config.Step{Name: name, Type: t}
-
-	switch t {
-	case config.StepScript:
-		run := strings.TrimSpace(m.curRun)
-		if run == "" {
-			m.errMsg = "script step requires a run command"
-			m.focus = fStepRun
-			return
-		}
-		step.Run = run
-		step.OnFail = onFailOptions[m.curOnFailIdx]
-	case config.StepHeadless, config.StepInteractive:
-		prompt := strings.TrimSpace(m.curPrompt)
-		if prompt == "" {
-			m.errMsg = "prompt is required"
-			m.focus = fStepPrompt
-			return
-		}
-		step.Prompt = prompt
-		if m.curHarnessIdx > 0 {
-			step.Harness = m.harnessOptions[m.curHarnessIdx]
-		}
-		if t == config.StepHeadless {
-			step.OnFail = onFailOptions[m.curOnFailIdx]
-		}
-	}
-	step.Outputs = splitOutputs(m.curOutputs)
-
-	m.steps = append(m.steps, step)
-	m.curName, m.curRun, m.curPrompt, m.curOutputs = "", "", "", ""
-	m.curTypeIdx, m.curHarnessIdx, m.curOnFailIdx = 0, 0, 0
+	m.revalidate()
 	m.errMsg = ""
-	m.focus = fStepName
+	return m, nil
 }
 
-// finish validates the loop as a whole (name set, at least one step,
-// concurrency a positive integer if given) and, on success, marks the
-// form Done so Loop() can assemble the result.
-func (m *Model) finish() {
-	if strings.TrimSpace(m.name) == "" {
-		m.errMsg = "loop name is required"
-		m.focus = fName
-		return
-	}
-	if len(m.steps) == 0 {
-		m.errMsg = "add at least one step before finishing"
-		m.focus = fStepName
-		return
-	}
-	n := 1
-	if c := strings.TrimSpace(m.concurrency); c != "" {
-		parsed, err := strconv.Atoi(c)
-		if err != nil || parsed < 1 {
-			m.errMsg = "concurrency must be a positive integer"
-			m.focus = fConcurrency
-			return
-		}
-		n = parsed
-	}
-	m.concurrencyN = n
-	m.errMsg = ""
-	m.done = true
-}
-
-// splitOutputs parses a comma-separated outputs field into a trimmed,
-// non-empty slice of variable names.
-func splitOutputs(val string) []string {
-	if val == "" {
-		return nil
-	}
-	parts := strings.Split(val, ",")
-	outs := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			outs = append(outs, p)
-		}
-	}
-	return outs
-}
-
-// Loop assembles the loop built so far and reports whether the form has
-// been finished. Before that, ok is false and the loop is nil.
-func (m Model) Loop() (*config.Loop, bool) {
-	if !m.done {
-		return nil, false
-	}
-	return &config.Loop{
-		Name:        strings.TrimSpace(m.name),
-		Concurrency: m.concurrencyN,
-		Steps:       m.steps,
-	}, true
-}
-
-// Done reports whether the builder has finished its form.
-func (m Model) Done() bool {
-	return m.done
-}
-
-// stepTypeLabels returns config.StepType's string values in
-// stepTypeOptions order.
-func stepTypeLabels() []string {
-	labels := make([]string, len(stepTypeOptions))
-	for i, t := range stepTypeOptions {
-		labels[i] = string(t)
-	}
-	return labels
-}
-
-// onFailLabels returns config.OnFail's string values in onFailOptions
-// order.
-func onFailLabels() []string {
-	labels := make([]string, len(onFailOptions))
-	for i, f := range onFailOptions {
-		labels[i] = string(f)
-	}
-	return labels
-}
-
-// View implements tea.Model, rendering the entire form on one page: loop
-// fields, the steps added so far, the in-progress step editor (fields
-// relevant to its selected type only), and any validation error.
+// View implements tea.Model, rendering the step list with the cursor and
+// any invalid steps in red.
 func (m Model) View() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", style.Title.Render("Loop builder"))
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Loop: %s", m.loop.Name)))
 
-	b.WriteString(m.renderField(fName, "Loop name", m.name))
-	b.WriteString(m.renderField(fConcurrency, "Concurrency (blank = 1)", m.concurrency))
-
-	if len(m.steps) > 0 {
-		fmt.Fprintf(&b, "\n%s\n", style.SubHeader.Render("Steps so far:"))
-		for i, s := range m.steps {
-			fmt.Fprintf(&b, "  %d. %s (%s) %s\n", i+1, s.Name, s.Type, stepSummary(s))
+	if len(m.loop.Steps) == 0 {
+		b.WriteString(style.Label.Render("(no steps yet — press c to create one)") + "\n")
+	}
+	for i, s := range m.loop.Steps {
+		marker := "  "
+		if i == m.cursor {
+			marker = style.Marker.Render("▸ ")
 		}
+		line := fmt.Sprintf("%s (%s)", s.Name, s.Type)
+		if err, bad := m.stepErrors[s.Name]; bad {
+			line = style.Error.Render(line + " — " + err.Error())
+		}
+		fmt.Fprintf(&b, "%s%s\n", marker, line)
 	}
 
-	fmt.Fprintf(&b, "\n%s\n", style.SubHeader.Render("New step:"))
-	b.WriteString(m.renderField(fStepName, "Step name", m.curName))
-	b.WriteString(m.renderSelect(fStepType, "Step type"))
-
-	switch stepTypeOptions[m.curTypeIdx] {
-	case config.StepScript:
-		b.WriteString(m.renderField(fStepRun, "Run command", m.curRun))
-		b.WriteString(m.renderDraft())
-	case config.StepHeadless, config.StepInteractive:
-		b.WriteString(m.renderField(fStepPrompt, "Prompt", m.curPrompt))
-		b.WriteString(m.renderSelect(fStepHarness, "Harness"))
+	if m.authoring {
+		fmt.Fprintf(&b, "\n%s\n", style.Busy.Render("session running…"))
 	}
-	b.WriteString(m.renderField(fStepOutputs, "Outputs (comma-separated)", m.curOutputs))
-	switch stepTypeOptions[m.curTypeIdx] {
-	case config.StepScript, config.StepHeadless:
-		b.WriteString(m.renderSelect(fStepOnFail, "On fail"))
-	}
-
-	b.WriteString(m.renderAction(fAddStep, "Add step"))
-	b.WriteString(m.renderAction(fFinish, "Finish & save loop"))
-
 	if m.errMsg != "" {
 		fmt.Fprintf(&b, "\n%s\n", style.Error.Render("! "+m.errMsg))
 	}
-	b.WriteString("\n" + style.KeyHint.Render("[tab/shift+tab] move  [←/→] change option  [enter] confirm/select  [ctrl+d] draft script") + "\n")
+	b.WriteString("\n" + style.KeyHint.Render("[c] create-step  [e] edit-step  [d] delete  [↑/↓] move  [q] quit") + "\n")
 	return b.String()
-}
-
-// marker returns the focus indicator for id.
-func (m Model) marker(id fieldID) string {
-	if m.focus == id {
-		return style.Marker.Render("▸ ")
-	}
-	return "  "
-}
-
-func (m Model) renderField(id fieldID, label, value string) string {
-	return fmt.Sprintf("%s%s %s\n", m.marker(id), style.Label.Render(label+":"), value)
-}
-
-func (m Model) renderSelect(id fieldID, label string) string {
-	idx := m.selectIdx(id)
-	opts := m.selectOptions(id)
-	return fmt.Sprintf("%s%s %s\n", m.marker(id), style.Label.Render(label+":"), style.Select.Render("‹ "+opts[idx]+" ›"))
-}
-
-// selectIdx returns the focused select field's current option index.
-func (m Model) selectIdx(id fieldID) int {
-	switch id {
-	case fStepType:
-		return m.curTypeIdx
-	case fStepHarness:
-		return m.curHarnessIdx
-	case fStepOnFail:
-		return m.curOnFailIdx
-	}
-	return 0
-}
-
-func (m Model) renderAction(id fieldID, label string) string {
-	s := style.ActionInactive
-	if m.focus == id {
-		s = style.Action
-	}
-	return fmt.Sprintf("%s%s\n", m.marker(id), s.Render("[enter] "+label))
-}
-
-func (m Model) renderDraft() string {
-	if m.drafting {
-		return fmt.Sprintf("%s%s\n", m.marker(fDraft), style.Busy.Render("drafting… (session running)"))
-	}
-	label := "[ctrl+d] Draft script with harness (opens interactive session)"
-	return fmt.Sprintf("%s%s\n", m.marker(fDraft), style.Action.Render(label))
-}
-
-// stepSummary renders a short, type-appropriate summary of an already
-// added step for the "Steps so far" list.
-func stepSummary(s config.Step) string {
-	switch s.Type {
-	case config.StepScript:
-		return "run: " + truncate(s.Run)
-	case config.StepHeadless, config.StepInteractive:
-		h := s.Harness
-		if h == "" {
-			h = "default"
-		}
-		return fmt.Sprintf("harness: %s, prompt: %s", h, truncate(s.Prompt))
-	default:
-		return ""
-	}
-}
-
-// truncate shortens s to a display-friendly length.
-func truncate(s string) string {
-	const max = 40
-	r := []rune(strings.ReplaceAll(s, "\n", " "))
-	if len(r) <= max {
-		return string(r)
-	}
-	return string(r[:max]) + "…"
 }
