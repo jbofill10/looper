@@ -140,9 +140,6 @@ type Options struct {
 	// claude session to create or edit a step (see
 	// builder.Options.AuthorFn).
 	AuthorFn func(builder.AuthorRequest) tea.Cmd
-	// ListLoopsFn, if set, fetches the current Loops-catalog snapshot. It
-	// returns a tea.Cmd yielding a LoopsSnapshotMsg or ErrMsg.
-	ListLoopsFn func() tea.Cmd
 	// SetLoopEnabledFn toggles a loop's enabled state.
 	SetLoopEnabledFn func(loopName string, enabled bool) tea.Cmd
 	// RunLoopOnceFn starts a loop as a one-off run.
@@ -262,6 +259,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.treeCursor < 0 {
 			m.treeCursor = 0
 		}
+		return m, nil
+	case ErrMsg:
+		m.builderMsg = fmt.Sprintf("error: %v", msg.Err)
 		return m, nil
 	case tea.KeyMsg:
 		if m.renamingLoop != "" {

@@ -177,6 +177,12 @@ type Manager struct {
 	nextSubID int
 
 	registryPath string
+	// registryMu serializes the registry's load-mutate-save sequence used
+	// by SetLoopEnabled, RenameLoop, DeleteLoop, and AutoResume, so two
+	// concurrent calls (e.g. toggling two different loops at once) can't
+	// race and have one write clobber the other. It guards only the
+	// registry file, not m.runs/m.subs — do not conflate the two locks.
+	registryMu sync.Mutex
 }
 
 // NewManager returns a Manager for orchestrating loops. A nil global uses

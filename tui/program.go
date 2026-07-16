@@ -49,7 +49,6 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 		ProjectDir:         wd,
 		NewLoopPathFn:      newLoopPathFn(wd),
 		AuthorFn:           authorFn(&p, global, wd),
-		ListLoopsFn:        listLoopsFn(ctx, cl, baseDir),
 		SetLoopEnabledFn:   setLoopEnabledFn(ctx, cl, baseDir, wd),
 		RunLoopOnceFn:      runLoopOnceFn(ctx, cl, baseDir, wd),
 		StopLoopGracefulFn: stopLoopGracefulFn(ctx, cl, baseDir),
@@ -317,7 +316,7 @@ func setLoopEnabledFn(ctx context.Context, cl rpc.LooperClient, baseDir, workdir
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			return listLoopsFn(ctx, cl, baseDir)()
+			return listLoopsFn(ctx, cl, baseDir)()()
 		}
 	}
 }
@@ -332,7 +331,7 @@ func runLoopOnceFn(ctx context.Context, cl rpc.LooperClient, baseDir, workdir st
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			return listLoopsFn(ctx, cl, baseDir)()
+			return listLoopsFn(ctx, cl, baseDir)()()
 		}
 	}
 }
@@ -347,7 +346,7 @@ func stopLoopGracefulFn(ctx context.Context, cl rpc.LooperClient, baseDir string
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			return listLoopsFn(ctx, cl, baseDir)()
+			return listLoopsFn(ctx, cl, baseDir)()()
 		}
 	}
 }
@@ -364,7 +363,7 @@ func abortLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func(
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			return listLoopsFn(ctx, cl, baseDir)()
+			return listLoopsFn(ctx, cl, baseDir)()()
 		}
 	}
 }
@@ -379,7 +378,7 @@ func renameLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			return listLoopsFn(ctx, cl, baseDir)()
+			return listLoopsFn(ctx, cl, baseDir)()()
 		}
 	}
 }
@@ -394,7 +393,7 @@ func deleteLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func
 			if err != nil {
 				return ErrMsg{Err: err}
 			}
-			return listLoopsFn(ctx, cl, baseDir)()
+			return listLoopsFn(ctx, cl, baseDir)()()
 		}
 	}
 }

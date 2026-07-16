@@ -91,13 +91,17 @@ func isYAMLFile(name string) bool {
 // triggers a graceful stop (StopLoopGraceful) and returns its run id;
 // disabling an already-stopped loop returns "".
 func (m *Manager) SetLoopEnabled(loopName, baseDir, workdir string, enabled bool) (string, error) {
+	m.registryMu.Lock()
 	registry, err := loadRegistry(m.registryPath)
 	if err != nil {
+		m.registryMu.Unlock()
 		return "", err
 	}
 	key := registryKey(baseDir, loopName)
 	registry[key] = registryEntry{BaseDir: baseDir, Workdir: workdir, LoopName: loopName, Enabled: enabled}
-	if err := saveRegistry(m.registryPath, registry); err != nil {
+	err = saveRegistry(m.registryPath, registry)
+	m.registryMu.Unlock()
+	if err != nil {
 		return "", err
 	}
 
@@ -177,6 +181,8 @@ func (m *Manager) RenameLoop(loopName, newName, baseDir string) error {
 		return fmt.Errorf("removing old loop file: %w", err)
 	}
 
+	m.registryMu.Lock()
+	defer m.registryMu.Unlock()
 	registry, err := loadRegistry(m.registryPath)
 	if err != nil {
 		return err
@@ -205,6 +211,8 @@ func (m *Manager) DeleteLoop(loopName, baseDir string) error {
 		return fmt.Errorf("removing loop file: %w", err)
 	}
 
+	m.registryMu.Lock()
+	defer m.registryMu.Unlock()
 	registry, err := loadRegistry(m.registryPath)
 	if err != nil {
 		return err
@@ -225,7 +233,9 @@ func (m *Manager) DeleteLoop(loopName, baseDir string) error {
 // aborting the rest — one bad entry must not block every other loop from
 // resuming.
 func (m *Manager) AutoResume() []error {
+	m.registryMu.Lock()
 	registry, err := loadRegistry(m.registryPath)
+	m.registryMu.Unlock()
 	if err != nil {
 		return []error{err}
 	}

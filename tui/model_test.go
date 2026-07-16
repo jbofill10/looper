@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -172,5 +174,26 @@ func TestModel_TabSwitchesFocusToLoopsTree(t *testing.T) {
 	}
 	if m.cursor != 0 {
 		t.Errorf("cursor (Workers) = %d, want unchanged at 0 while the Loops tree has focus", m.cursor)
+	}
+}
+
+// TestModel_ErrMsgSurfacesInBuilderMsg guards against RPC errors (e.g. the
+// by-design rejection when renaming/deleting a loop with an active run)
+// being silently dropped: Update must store the error where viewFleet
+// renders it, following the existing "error:"-prefixed builderMsg
+// convention.
+func TestModel_ErrMsgSurfacesInBuilderMsg(t *testing.T) {
+	m := NewModel(Options{})
+	next, cmd := m.Update(ErrMsg{Err: errors.New("loop \"a\" has an active run (run-1); stop it before renaming")})
+	m = next.(Model)
+
+	if cmd != nil {
+		t.Errorf("Update(ErrMsg) cmd = %v, want nil", cmd)
+	}
+	if !strings.HasPrefix(m.builderMsg, "error:") {
+		t.Fatalf("builderMsg = %q, want it to start with %q", m.builderMsg, "error:")
+	}
+	if !strings.Contains(m.builderMsg, "active run") {
+		t.Errorf("builderMsg = %q, want it to contain the underlying error text", m.builderMsg)
 	}
 }
