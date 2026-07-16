@@ -287,15 +287,16 @@ func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleBuilderKey routes a key press while the guided loop builder
-// (viewBuilder) is active: ctrl+c quits the whole program, esc discards
-// the in-progress builder and returns to the fleet view without saving,
-// and any other key is forwarded to the builder's own Update. If that
-// forwarded key advances the builder to its done stage, the resulting
-// loop is saved via Options.SaveLoopFn and the fleet view is shown with
-// the outcome in builderMsg. The builder's own tea.Quit (it is designed
-// to run standalone in the CLI's `looper new`) is swallowed here — it
-// must not quit the embedding fleet program.
+// handleBuilderKey routes a key press while the embedded file-backed loop
+// builder (viewBuilder) is active: ctrl+c quits the whole program, esc
+// discards the in-progress builder and returns to the fleet view (the
+// loop file itself is already saved continuously by the builder, so esc
+// only affects the fleet view's state, not the file), and any other key
+// is forwarded to the builder's own Update. If that forwarded key sets
+// the builder's Quit(), its Path() is shown in builderMsg and the fleet
+// view is shown. The builder's own tea.Quit (it is designed to run
+// standalone in the CLI's `looper new`) is swallowed here — it must not
+// quit the embedding fleet program.
 func (m Model) handleBuilderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":

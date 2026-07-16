@@ -129,8 +129,12 @@ func loadLoopLenient(path string) (*config.Loop, error) {
 }
 
 // writeLoopFile marshals l to YAML and writes it to path, creating any
-// missing parent directories, without requiring l to pass Validate. It's
-// used only for the initial skeleton, which deliberately has zero steps.
+// missing parent directories, without requiring l to pass Validate. Used
+// for the initial skeleton (deliberately zero steps) and for every other
+// direct, session-free mutation the builder performs (delete, reorder,
+// confirming the concurrency stage) — the loop is deliberately allowed to
+// be transiently invalid on disk so validation stays advisory, never
+// blocking.
 func writeLoopFile(l *config.Loop, path string) error {
 	data, err := yaml.Marshal(l)
 	if err != nil {
