@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -105,5 +106,65 @@ func TestDaemonPingShutdownIntegration(t *testing.T) {
 
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Fatalf("socket file still exists after shutdown: err=%v", err)
+	}
+}
+
+// TestDaemonSIGINTIntegration spawns a real `looper daemon`, sends it
+// SIGINT (as Ctrl-C would), and asserts it exits cleanly and removes its
+// socket file — the same outcome as a graceful `looper shutdown`.
+func TestDaemonSIGINTIntegration(t *testing.T) {
+	binPath := buildLooperBinary(t)
+
+	socketPath := filepath.Join(t.TempDir(), "looper.sock")
+	logPath := socketPath + ".log"
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("creating daemon log file: %v", err)
+	}
+	defer logFile.Close()
+
+	daemonCmd := exec.Command(binPath, "daemon", "--socket", socketPath)
+	daemonCmd.Stdout = logFile
+	daemonCmd.Stderr = logFile
+	daemonCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := daemonCmd.Start(); err != nil {
+		t.Fatalf("starting daemon process: %v", err)
+	}
+	daemonProc := daemonCmd.Process
+	t.Cleanup(func() {
+		_ = daemonProc.Kill()
+	})
+
+	waitForPing(t, socketPath, 3*time.Second)
+
+	if err := daemonProc.Signal(os.Interrupt); err != nil {
+		t.Fatalf("sending SIGINT: %v", err)
+	}
+
+	waitErrCh := make(chan error, 1)
+	go func() { waitErrCh <- daemonCmd.Wait() }()
+	select {
+	case <-waitErrCh:
+		// process exited, as expected.
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for daemon process to exit after SIGINT")
+	}
+
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("socket file still exists after SIGINT: err=%v", err)
+	}
+}
+
+// TestVersionCLIIntegration exercises `looper version` via the built binary,
+// asserting it prints daemon.Version.
+func TestVersionCLIIntegration(t *testing.T) {
+	binPath := buildLooperBinary(t)
+
+	out, err := exec.Command(binPath, "version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("looper version: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), daemon.Version) {
+		t.Errorf("looper version output = %q, want it to contain %q", out, daemon.Version)
 	}
 }

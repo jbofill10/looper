@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/jbofill10/looper/client"
@@ -25,7 +27,23 @@ func newDaemonCmd() *cobra.Command {
 		Short:  "Run the looper daemon in the foreground",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return daemon.New().Serve(socket)
+			srv := daemon.New()
+
+			// Install SIGINT/SIGTERM handling so Ctrl-C (or a controlled
+			// `kill`) stops the daemon gracefully: Stop() drains in-flight
+			// RPCs and Serve's own deferred os.Remove cleans up the socket
+			// file, instead of the process dying uncleanly and leaving a
+			// stale socket behind.
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			defer signal.Stop(sigCh)
+			go func() {
+				if _, ok := <-sigCh; ok {
+					srv.Stop()
+				}
+			}()
+
+			return srv.Serve(socket)
 		},
 	}
 	cmd.Flags().StringVar(&socket, "socket", client.SocketPath(), "path to looperd's Unix socket")
