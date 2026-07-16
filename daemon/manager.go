@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/pty"
 	"github.com/jbofill10/looper/runner"
 )
 
@@ -81,6 +83,32 @@ type runEntry struct {
 	cancel  context.CancelFunc
 	fanIn   chan Update // internal buffer; drained by a per-run fanout goroutine
 	pending map[string]*pendingRequest
+
+	sessMu  sync.Mutex
+	session *pty.Session // the run's live interactive session, if any
+}
+
+// setSession registers sess as the run's live interactive session, making it
+// visible to Manager.Session (and thus to an Attach RPC).
+func (re *runEntry) setSession(sess *pty.Session) {
+	re.sessMu.Lock()
+	defer re.sessMu.Unlock()
+	re.session = sess
+}
+
+// clearSession unregisters the run's live interactive session.
+func (re *runEntry) clearSession() {
+	re.sessMu.Lock()
+	defer re.sessMu.Unlock()
+	re.session = nil
+}
+
+// currentSession returns the run's live interactive session, or nil if none
+// is registered.
+func (re *runEntry) currentSession() *pty.Session {
+	re.sessMu.Lock()
+	defer re.sessMu.Unlock()
+	return re.session
 }
 
 // Manager owns the daemon's active and finished runs. It is pure Go with no
@@ -133,9 +161,11 @@ func newCounter(prefix string) func() string {
 }
 
 // StartLoop loads and validates the loop (from loopFile, or
-// baseDir/loops/loopName.yaml if loopFile is empty), rejects it if it
-// contains any interactive step, and launches it as a new run. It returns
-// the new run's id.
+// baseDir/loops/loopName.yaml if loopFile is empty) and launches it as a new
+// run. Interactive steps run inside the daemon: each session is registered
+// on the run (see Manager.Session) for a client to attach to, rather than
+// being auto-attached to the daemon's own stdio. It returns the new run's
+// id.
 func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string) (string, error) {
 	path := loopFile
 	if path == "" {
@@ -147,11 +177,6 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string) (string
 	loop, err := config.LoadLoop(path)
 	if err != nil {
 		return "", err
-	}
-	for _, s := range loop.Steps {
-		if s.Type == config.StepInteractive {
-			return "", fmt.Errorf("loop %q: interactive step %q is not supported by the daemon (run it with `looper run` instead)", loop.Name, s.Name)
-		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,6 +203,9 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string) (string
 		Global:    m.global,
 		LooperBin: m.looperBin,
 		Ctx:       ctx,
+		InteractiveRun: func(argv, env []string, socketPath string) error {
+			return m.runInteractiveSession(ctx, re, runID, argv, env)
+		},
 		OnReport: func(r runner.Report) {
 			m.onReport(runID, loop.Name, r)
 		},
@@ -233,6 +261,61 @@ func (m *Manager) StopLoop(runID string) error {
 	}
 	re.cancel()
 	return nil
+}
+
+// Session returns the live *pty.Session for runID, and whether one is
+// currently registered. It is used by the Attach RPC handler to bridge a
+// client stream to the run's interactive session.
+func (m *Manager) Session(runID string) (*pty.Session, bool) {
+	m.mu.Lock()
+	re, ok := m.runs[runID]
+	m.mu.Unlock()
+	if !ok {
+		return nil, false
+	}
+	sess := re.currentSession()
+	return sess, sess != nil
+}
+
+// runInteractiveSession is the daemon's runner.Worker.InteractiveRun
+// implementation: it starts argv in a looper-owned pty, registers the
+// session on re for remote attach (Manager.Session), and waits for it to
+// exit. Unlike the local `looper run` default (runPTY), it does not
+// auto-attach to the daemon's own stdio; a client attaches remotely via the
+// Attach RPC. If ctx is cancelled (StopLoop) before the session exits on its
+// own, the session is killed so the run can end promptly.
+func (m *Manager) runInteractiveSession(ctx context.Context, re *runEntry, runID string, argv, env []string) error {
+	sess, err := pty.Start(pty.Config{Argv: argv, Env: env, Dir: workdirFromEnv(env)})
+	if err != nil {
+		return err
+	}
+	re.setSession(sess)
+	defer re.clearSession()
+
+	m.publish(Update{RunID: runID, Kind: "state", State: "session_live"})
+
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- sess.Wait() }()
+
+	select {
+	case err := <-waitErr:
+		_ = sess.Close()
+		return err
+	case <-ctx.Done():
+		_ = sess.Close()
+		return <-waitErr
+	}
+}
+
+// workdirFromEnv extracts the WORKDIR entry from a KEY=VALUE env slice, as
+// set by runctx for interactive/headless steps.
+func workdirFromEnv(env []string) string {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == "WORKDIR" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ListRuns returns a snapshot of all known runs, stable-sorted by run id.
@@ -417,10 +500,13 @@ func (p *remotePrompter) Manual(step config.Step) (runner.Outcome, error) {
 	return p.ask(step)
 }
 
-// Interactive is not reachable: StartLoop rejects loops with interactive
-// steps. Implemented defensively.
+// Interactive round-trips the decision the same way Manual/AskFailure do:
+// the client watching the run's state stream decides advance/retry/abort
+// once the session's hook-derived final state is known. finalState is
+// already visible to the client via the "state" Updates published while
+// the session ran, so it isn't repeated here.
 func (p *remotePrompter) Interactive(step config.Step, finalState string) (runner.Outcome, error) {
-	return runner.OutcomeAbort, fmt.Errorf("interactive steps are not supported by the daemon")
+	return p.ask(step)
 }
 
 func (p *remotePrompter) ask(step config.Step) (runner.Outcome, error) {
