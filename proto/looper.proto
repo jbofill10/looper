@@ -53,6 +53,7 @@ message StartLoopRequest {
   string loop_file = 2; // explicit loop file (overrides loop_name)
   string base_dir = 3;  // the .looper dir
   string workdir = 4;   // execution dir
+  int32 concurrency = 5; // number of workers; 0 = the loop's configured concurrency
 }
 message StartLoopResponse { string run_id = 1; }
 
@@ -60,6 +61,14 @@ message StopLoopRequest { string run_id = 1; }
 message StopLoopResponse {}
 
 message ListRunsRequest {}
+message WorkerInfo {
+  string worker_id = 1;
+  string task = 2;          // the worker's current work unit (task var)
+  int32 iteration = 3;
+  string current_step = 4;
+  string state = 5;
+  string status = 6;        // running | idle | done | stopped | error
+}
 message RunInfo {
   string run_id = 1;
   string loop_name = 2;
@@ -68,6 +77,7 @@ message RunInfo {
   string current_step = 5;
   string state = 6;
   string error = 7;
+  repeated WorkerInfo workers = 8;
 }
 message ListRunsResponse { repeated RunInfo runs = 1; }
 
@@ -84,6 +94,8 @@ message StateUpdate {
   string message = 7;
   string request_id = 8;      // set when kind == decision_request
   repeated string options = 9; // e.g. ["advance","retry","abort"]
+  string worker_id = 10;       // which worker this update is about
+  string task = 11;            // the worker's current work unit
 }
 
 message RespondDecisionRequest {
