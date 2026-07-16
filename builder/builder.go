@@ -65,6 +65,9 @@ type Model struct {
 	authoring bool
 	quit      bool
 	errMsg    string
+
+	awaitingConcurrency bool
+	concurrencyChoice   int
 }
 
 // New loads the loop at loopPath, or, if it doesn't exist yet, writes a
@@ -80,22 +83,29 @@ type Model struct {
 // the bad one via StepErrors — rather than refusing to load it at all.
 func New(projectDir, loopPath string, opts Options) (Model, error) {
 	loop, err := loadLoopLenient(loopPath)
+	freshLoop := false
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return Model{}, fmt.Errorf("load loop: %w", err)
 		}
-		skeleton := &config.Loop{Name: loopName(loopPath), Steps: []config.Step{}}
+		skeleton := &config.Loop{Name: loopName(loopPath), Concurrency: 1, Steps: []config.Step{}}
 		if saveErr := writeLoopFile(skeleton, loopPath); saveErr != nil {
 			return Model{}, fmt.Errorf("write new loop skeleton: %w", saveErr)
 		}
 		loop = skeleton
+		freshLoop = true
 	}
 
 	m := Model{
-		opts:       opts,
-		projectDir: projectDir,
-		loopPath:   loopPath,
-		loop:       loop,
+		opts:                opts,
+		projectDir:          projectDir,
+		loopPath:            loopPath,
+		loop:                loop,
+		awaitingConcurrency: freshLoop,
+		concurrencyChoice:   loop.Concurrency,
+	}
+	if m.concurrencyChoice < 1 {
+		m.concurrencyChoice = 1
 	}
 	m.revalidate()
 	return m, nil
@@ -166,6 +176,19 @@ func (m Model) Path() string {
 // Quit reports whether the user has requested to leave the builder.
 func (m Model) Quit() bool {
 	return m.quit
+}
+
+// AwaitingConcurrency reports whether the model is still on the initial
+// concurrency-selection stage shown once for a brand-new loop, before its
+// step list becomes editable.
+func (m Model) AwaitingConcurrency() bool {
+	return m.awaitingConcurrency
+}
+
+// Concurrency returns the concurrency value currently selected (while
+// AwaitingConcurrency) or already saved (once confirmed).
+func (m Model) Concurrency() int {
+	return m.concurrencyChoice
 }
 
 // revalidate recomputes m.stepErrors from m.loop.Steps by calling
@@ -241,6 +264,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // edit-step session for the selected step, d deletes the selected step
 // (rewriting the file directly, no session), and q requests to quit.
 func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.awaitingConcurrency {
+		return m.handleConcurrencyKey(key)
+	}
 	if m.authoring {
 		return m, nil
 	}
@@ -255,6 +281,10 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor++
 		}
 		return m, nil
+	case "shift+up":
+		return m.moveSelected(-1)
+	case "shift+down":
+		return m.moveSelected(1)
 	case "c":
 		return m.requestAuthor("")
 	case "e":
@@ -264,6 +294,37 @@ func (m Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.requestAuthor(m.loop.Steps[m.cursor].Name)
 	case "d":
 		return m.deleteSelected()
+	case "q":
+		m.quit = true
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleConcurrencyKey handles the initial concurrency-selection stage
+// for a brand-new loop: left/right adjust the value (minimum 1), enter
+// confirms and writes it to the file, q quits without confirming.
+func (m Model) handleConcurrencyKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "left":
+		if m.concurrencyChoice > 1 {
+			m.concurrencyChoice--
+		}
+		return m, nil
+	case "right":
+		m.concurrencyChoice++
+		return m, nil
+	case "enter":
+		updated := *m.loop
+		updated.Concurrency = m.concurrencyChoice
+		if err := writeLoopFile(&updated, m.loopPath); err != nil {
+			m.errMsg = fmt.Sprintf("set concurrency: %v", err)
+			return m, nil
+		}
+		m.loop = &updated
+		m.awaitingConcurrency = false
+		m.errMsg = ""
+		return m, nil
 	case "q":
 		m.quit = true
 		return m, nil
@@ -299,7 +360,7 @@ func (m Model) deleteSelected() (tea.Model, tea.Cmd) {
 	next = append(next, m.loop.Steps[m.cursor+1:]...)
 	updated := *m.loop
 	updated.Steps = next
-	if err := config.SaveLoop(&updated, m.loopPath); err != nil {
+	if err := writeLoopFile(&updated, m.loopPath); err != nil {
 		m.errMsg = fmt.Sprintf("delete step: %v", err)
 		return m, nil
 	}
@@ -315,9 +376,38 @@ func (m Model) deleteSelected() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// moveSelected swaps the selected step with its neighbor delta positions
+// away (-1 = earlier, +1 = later), writes the reordered list directly to
+// the file (no authoring session), and moves the cursor to follow it. A
+// delta that would move past either end of the list is a no-op.
+func (m Model) moveSelected(delta int) (tea.Model, tea.Cmd) {
+	target := m.cursor + delta
+	if target < 0 || target >= len(m.loop.Steps) {
+		return m, nil
+	}
+	next := append([]config.Step{}, m.loop.Steps...)
+	next[m.cursor], next[target] = next[target], next[m.cursor]
+
+	updated := *m.loop
+	updated.Steps = next
+	if err := writeLoopFile(&updated, m.loopPath); err != nil {
+		m.errMsg = fmt.Sprintf("reorder step: %v", err)
+		return m, nil
+	}
+	m.loop = &updated
+	m.cursor = target
+	m.revalidate()
+	m.errMsg = ""
+	return m, nil
+}
+
 // View implements tea.Model, rendering the step list with the cursor and
 // any invalid steps in red.
 func (m Model) View() string {
+	if m.awaitingConcurrency {
+		return m.viewConcurrency()
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Loop: %s", m.loop.Name)))
 
@@ -342,6 +432,16 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		fmt.Fprintf(&b, "\n%s\n", style.Error.Render("! "+m.errMsg))
 	}
-	b.WriteString("\n" + style.KeyHint.Render("[c] create-step  [e] edit-step  [d] delete  [↑/↓] move  [q] quit") + "\n")
+	b.WriteString("\n" + style.KeyHint.Render("[c] create-step  [e] edit-step  [d] delete  [↑/↓] cursor  [shift+↑/↓] reorder  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewConcurrency renders the one-time concurrency-selection stage shown
+// for a brand-new loop, before its step list becomes editable.
+func (m Model) viewConcurrency() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Loop: %s", m.loop.Name)))
+	fmt.Fprintf(&b, "%s %s\n", style.Label.Render("Concurrency:"), style.Select.Render(fmt.Sprintf("‹ %d ›", m.concurrencyChoice)))
+	b.WriteString("\n" + style.KeyHint.Render("[←/→] change  [enter] confirm  [q] quit") + "\n")
 	return b.String()
 }
