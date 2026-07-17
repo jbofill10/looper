@@ -44,18 +44,18 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 	baseDir := filepath.Join(wd, ".looper")
 	var p *tea.Program
 	model := NewModel(Options{
-		RespondFn:          respondFn(ctx, cl),
-		AttachFn:           attachFn(ctx, cl, &p),
-		ProjectDir:         wd,
-		NewLoopPathFn:      newLoopPathFn(wd),
-		AuthorFn:           authorFn(&p, global, wd),
-		SetLoopEnabledFn:   setLoopEnabledFn(ctx, cl, baseDir, wd),
+		RespondFn:            respondFn(ctx, cl),
+		AttachFn:             attachFn(ctx, cl, &p),
+		ProjectDir:           wd,
+		NewLoopPathFn:        newLoopPathFn(wd),
+		AuthorFn:             authorFn(&p, global, wd),
+		SetLoopEnabledFn:     setLoopEnabledFn(ctx, cl, baseDir, wd),
 		SetScheduleEnabledFn: setScheduleEnabledFn(ctx, cl, baseDir, wd),
-		RunLoopOnceFn:      runLoopOnceFn(ctx, cl, baseDir, wd),
-		StopLoopGracefulFn: stopLoopGracefulFn(ctx, cl, baseDir),
-		AbortLoopFn:        abortLoopFn(ctx, cl, baseDir),
-		RenameLoopFn:       renameLoopFn(ctx, cl, baseDir),
-		DeleteLoopFn:       deleteLoopFn(ctx, cl, baseDir),
+		RunLoopOnceFn:        runLoopOnceFn(ctx, cl, baseDir, wd),
+		StopLoopGracefulFn:   stopLoopGracefulFn(ctx, cl, baseDir),
+		AbortLoopFn:          abortLoopFn(ctx, cl, baseDir),
+		RenameLoopFn:         renameLoopFn(ctx, cl, baseDir),
+		DeleteLoopFn:         deleteLoopFn(ctx, cl, baseDir),
 	})
 	p = tea.NewProgram(model)
 
