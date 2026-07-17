@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/jbofill10/looper/rpc"
 	"google.golang.org/grpc/codes"
@@ -102,7 +103,14 @@ func (s *Server) ListLoops(ctx context.Context, req *rpc.ListLoopsRequest) (*rpc
 	}
 	out := make([]*rpc.LoopInfo, len(summaries))
 	for i, l := range summaries {
-		out[i] = &rpc.LoopInfo{Name: l.Name, Path: l.Path, Enabled: l.Enabled, Steps: l.Steps, RunId: l.RunID}
+		var nextRun string
+		if !l.NextRun.IsZero() {
+			nextRun = l.NextRun.Format(time.RFC3339)
+		}
+		out[i] = &rpc.LoopInfo{
+			Name: l.Name, Path: l.Path, Enabled: l.Enabled, Steps: l.Steps, RunId: l.RunID,
+			ScheduleEnabled: l.ScheduleEnabled, NextRun: nextRun,
+		}
 	}
 	return &rpc.ListLoopsResponse{Loops: out}, nil
 }
@@ -148,6 +156,15 @@ func (s *Server) DeleteLoop(ctx context.Context, req *rpc.DeleteLoopRequest) (*r
 		return nil, err
 	}
 	return &rpc.DeleteLoopResponse{}, nil
+}
+
+// SetScheduleEnabled persists a loop's schedule-enabled flag. It never
+// starts or stops a run itself.
+func (s *Server) SetScheduleEnabled(ctx context.Context, req *rpc.SetScheduleEnabledRequest) (*rpc.SetScheduleEnabledResponse, error) {
+	if err := s.manager.SetScheduleEnabled(req.GetLoopName(), req.GetBaseDir(), req.GetWorkdir(), req.GetEnabled()); err != nil {
+		return nil, err
+	}
+	return &rpc.SetScheduleEnabledResponse{}, nil
 }
 
 // Attach bridges a client's bidi stream to a run's live interactive pty

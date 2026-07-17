@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/rpc"
 	"gopkg.in/yaml.v3"
 )
@@ -491,5 +492,32 @@ func TestService_RenameAndDeleteLoop(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(loopsDir, "b.yaml")); !os.IsNotExist(err) {
 		t.Errorf("deleted file still exists")
+	}
+}
+
+func TestServer_SetScheduleEnabled(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:     "a",
+		Schedule: &config.Schedule{Every: "1h"},
+		Steps:    []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	baseDir := writeLoopsDir(t, dir, loop)
+
+	srv := NewWithGlobal(nil, "looper")
+	ctx := context.Background()
+
+	if _, err := srv.SetScheduleEnabled(ctx, &rpc.SetScheduleEnabledRequest{
+		LoopName: "a", BaseDir: baseDir, Workdir: dir, Enabled: false,
+	}); err != nil {
+		t.Fatalf("SetScheduleEnabled: %v", err)
+	}
+
+	resp, err := srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir})
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+	if len(resp.GetLoops()) != 1 || resp.GetLoops()[0].GetScheduleEnabled() {
+		t.Errorf("loops = %v, want one loop with ScheduleEnabled=false", resp.GetLoops())
 	}
 }
