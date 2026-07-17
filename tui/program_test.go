@@ -53,3 +53,13 @@ func TestLoopsSnapshotFromProto(t *testing.T) {
 		t.Errorf("loopsSnapshotFromProto = %+v, want %+v", got, want)
 	}
 }
+
+func TestLoopsSnapshotFromProto_MapsScheduleFields(t *testing.T) {
+	loops := []*rpc.LoopInfo{
+		{Name: "a", ScheduleEnabled: true, NextRun: "2026-07-17T21:00:00Z"},
+	}
+	got := loopsSnapshotFromProto(loops)
+	if len(got) != 1 || !got[0].ScheduleEnabled || got[0].NextRun != "2026-07-17T21:00:00Z" {
+		t.Errorf("loopsSnapshotFromProto = %+v, want ScheduleEnabled=true and NextRun preserved", got)
+	}
+}

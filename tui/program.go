@@ -50,6 +50,7 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 		NewLoopPathFn:      newLoopPathFn(wd),
 		AuthorFn:           authorFn(&p, global, wd),
 		SetLoopEnabledFn:   setLoopEnabledFn(ctx, cl, baseDir, wd),
+		SetScheduleEnabledFn: setScheduleEnabledFn(ctx, cl, baseDir, wd),
 		RunLoopOnceFn:      runLoopOnceFn(ctx, cl, baseDir, wd),
 		StopLoopGracefulFn: stopLoopGracefulFn(ctx, cl, baseDir),
 		AbortLoopFn:        abortLoopFn(ctx, cl, baseDir),
@@ -284,6 +285,7 @@ func loopsSnapshotFromProto(loops []*rpc.LoopInfo) LoopsSnapshotMsg {
 		out = append(out, LoopSnapshot{
 			Name: l.GetName(), Path: l.GetPath(), Enabled: l.GetEnabled(),
 			Steps: l.GetSteps(), RunID: l.GetRunId(),
+			ScheduleEnabled: l.GetScheduleEnabled(), NextRun: l.GetNextRun(),
 		})
 	}
 	return out
@@ -313,6 +315,23 @@ func setLoopEnabledFn(ctx context.Context, cl rpc.LooperClient, baseDir, workdir
 			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 			defer cancel()
 			_, err := cl.SetLoopEnabled(rctx, &rpc.SetLoopEnabledRequest{
+				LoopName: loopName, BaseDir: baseDir, Workdir: workdir, Enabled: enabled,
+			})
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return listLoopsFn(ctx, cl, baseDir)()()
+		}
+	}
+}
+
+// setScheduleEnabledFn returns the Options.SetScheduleEnabledFn implementation.
+func setScheduleEnabledFn(ctx context.Context, cl rpc.LooperClient, baseDir, workdir string) func(string, bool) tea.Cmd {
+	return func(loopName string, enabled bool) tea.Cmd {
+		return func() tea.Msg {
+			rctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+			defer cancel()
+			_, err := cl.SetScheduleEnabled(rctx, &rpc.SetScheduleEnabledRequest{
 				LoopName: loopName, BaseDir: baseDir, Workdir: workdir, Enabled: enabled,
 			})
 			if err != nil {
