@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 // Schedule declares a loop's repeating trigger. Exactly one of Every, At,
@@ -61,6 +63,10 @@ func (s *Schedule) CronSpecs() ([]string, error) {
 		return specs, nil
 
 	default:
+		_, err := cron.ParseStandard(s.Cron)
+		if err != nil {
+			return nil, fmt.Errorf("invalid schedule.cron %q: %w", s.Cron, err)
+		}
 		return []string{s.Cron}, nil
 	}
 }

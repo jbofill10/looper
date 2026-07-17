@@ -86,6 +86,13 @@ func TestSchedule_CronSpecs_CronPassthrough(t *testing.T) {
 	}
 }
 
+func TestSchedule_CronSpecs_CronInvalidExpressionRejected(t *testing.T) {
+	s := &Schedule{Cron: "not a cron expression"}
+	if _, err := s.CronSpecs(); err == nil {
+		t.Errorf("CronSpecs succeeded with an invalid cron expression, want an error")
+	}
+}
+
 func TestSchedule_CronSpecs_RejectsZeroSet(t *testing.T) {
 	s := &Schedule{}
 	if _, err := s.CronSpecs(); err == nil {
