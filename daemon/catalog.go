@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jbofill10/looper/config"
 )
@@ -24,11 +25,20 @@ type LoopSummary struct {
 	// RunID is the active run id if this loop currently has one running in
 	// this baseDir, else empty.
 	RunID string
+	// ScheduleEnabled is true only when the loop has a Schedule AND its
+	// schedule toggle (see Manager.SetScheduleEnabled) is enabled.
+	ScheduleEnabled bool
+	// NextRun is the soonest upcoming scheduled firing, or the zero Time
+	// if the loop has no schedule or ScheduleEnabled is false.
+	NextRun time.Time
 }
 
 // ListLoops scans <baseDir>/loops/*.yaml and cross-references the
-// registry (enabled flag) and active runs (RunID), sorted by loop name. A
-// missing loops directory returns an empty slice, not an error.
+// registry (enabled flag, schedule state) and active runs (RunID), sorted
+// by loop name. A missing loops directory returns an empty slice, not an
+// error. It also records baseDir in the registry's KnownProjects (see
+// recordKnownProject) so the background schedule rescan discovers this
+// project even if no loop in it is ever continuously enabled.
 func (m *Manager) ListLoops(baseDir string) ([]LoopSummary, error) {
 	loopsDir := filepath.Join(baseDir, "loops")
 	entries, err := os.ReadDir(loopsDir)
@@ -37,6 +47,13 @@ func (m *Manager) ListLoops(baseDir string) ([]LoopSummary, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading loops directory: %w", err)
+	}
+
+	m.registryMu.Lock()
+	err = recordKnownProject(m.registryPath, baseDir)
+	m.registryMu.Unlock()
+	if err != nil {
+		return nil, err
 	}
 
 	registry, err := loadRegistry(m.registryPath)
@@ -67,12 +84,22 @@ func (m *Manager) ListLoops(baseDir string) ([]LoopSummary, error) {
 		for i, s := range loop.Steps {
 			stepNames[i] = s.Name
 		}
+
+		key := registryKey(baseDir, loop.Name)
+		scheduleEnabled := loop.Schedule != nil && registry[key].scheduleEnabled()
+		var nextRun time.Time
+		if scheduleEnabled {
+			nextRun = m.nextRunFor(key)
+		}
+
 		out = append(out, LoopSummary{
-			Name:    loop.Name,
-			Path:    path,
-			Enabled: registry[registryKey(baseDir, loop.Name)].Enabled,
-			Steps:   stepNames,
-			RunID:   activeByLoop[loop.Name],
+			Name:            loop.Name,
+			Path:            path,
+			Enabled:         registry[key].Enabled,
+			Steps:           stepNames,
+			RunID:           activeByLoop[loop.Name],
+			ScheduleEnabled: scheduleEnabled,
+			NextRun:         nextRun,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
