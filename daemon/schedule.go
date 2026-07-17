@@ -8,6 +8,7 @@
 package daemon
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,7 +162,9 @@ func (m *Manager) fireSchedule(baseDir, loopName string) {
 	if m.activeRun(baseDir, loopName) != "" {
 		return
 	}
-	m.RunLoopOnce(loopName, "", baseDir, workdirFromBaseDir(baseDir))
+	if _, err := m.RunLoopOnce(loopName, "", baseDir, workdirFromBaseDir(baseDir)); err != nil {
+		log.Printf("schedule fire %s/%s: %v", baseDir, loopName, err)
+	}
 }
 
 // nextRunFor returns the soonest upcoming firing time across all of key's

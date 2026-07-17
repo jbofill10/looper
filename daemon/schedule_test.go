@@ -177,6 +177,29 @@ func TestManager_FireScheduleSkipsWhenAlreadyActive(t *testing.T) {
 	}
 }
 
+func TestManager_FireScheduleStartsARunWhenNoneActive(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:     "a",
+		Schedule: &config.Schedule{Every: "1h"},
+		Steps:    []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	baseDir := writeLoopsDir(t, dir, loop)
+
+	m := newTestManager(t)
+	ch, unsub := m.Subscribe("")
+	defer unsub()
+
+	m.fireSchedule(baseDir, "a")
+
+	// fireSchedule starts an async run; drain until we see it complete.
+	updates := drainUntilRunDone(t, ch)
+	last := updates[len(updates)-1]
+	if last.Kind != "run_done" || last.State != "done" {
+		t.Errorf("fireSchedule did not start a run that completed: last update = %+v", last)
+	}
+}
+
 func TestManager_RescanSchedulesCoversEveryKnownProject(t *testing.T) {
 	dir1, dir2 := t.TempDir(), t.TempDir()
 	loop1 := &config.Loop{Name: "a", Schedule: &config.Schedule{Every: "1h"}, Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}}}
