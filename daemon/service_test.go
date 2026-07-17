@@ -507,17 +507,40 @@ func TestServer_SetScheduleEnabled(t *testing.T) {
 	srv := NewWithGlobal(nil, "looper")
 	ctx := context.Background()
 
+	// Prime ListLoops to register baseDir
+	if _, err := srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir}); err != nil {
+		t.Fatalf("ListLoops (prime): %v", err)
+	}
+	// Rescan schedules to populate cron entries
+	srv.manager.rescanSchedules()
+
+	// Enable schedule and verify
 	if _, err := srv.SetScheduleEnabled(ctx, &rpc.SetScheduleEnabledRequest{
-		LoopName: "a", BaseDir: baseDir, Workdir: dir, Enabled: false,
+		LoopName: "a", BaseDir: baseDir, Workdir: dir, Enabled: true,
 	}); err != nil {
-		t.Fatalf("SetScheduleEnabled: %v", err)
+		t.Fatalf("SetScheduleEnabled(true): %v", err)
 	}
 
 	resp, err := srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir})
 	if err != nil {
 		t.Fatalf("ListLoops: %v", err)
 	}
+	if len(resp.GetLoops()) != 1 || !resp.GetLoops()[0].GetScheduleEnabled() {
+		t.Errorf("loops after enable = %v, want one loop with ScheduleEnabled=true", resp.GetLoops())
+	}
+
+	// Disable schedule and verify round-trip
+	if _, err := srv.SetScheduleEnabled(ctx, &rpc.SetScheduleEnabledRequest{
+		LoopName: "a", BaseDir: baseDir, Workdir: dir, Enabled: false,
+	}); err != nil {
+		t.Fatalf("SetScheduleEnabled(false): %v", err)
+	}
+
+	resp, err = srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir})
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
 	if len(resp.GetLoops()) != 1 || resp.GetLoops()[0].GetScheduleEnabled() {
-		t.Errorf("loops = %v, want one loop with ScheduleEnabled=false", resp.GetLoops())
+		t.Errorf("loops after disable = %v, want one loop with ScheduleEnabled=false", resp.GetLoops())
 	}
 }
