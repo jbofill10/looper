@@ -604,6 +604,42 @@ func TestWorker_ResumeDir_ConsumedAfterFirstIteration(t *testing.T) {
 	}
 }
 
+// TestWorker_ContextJSONExistsBeforeFirstStepRuns proves that a fresh
+// iteration's context.json is written to disk as soon as its run directory
+// is created — before its first step starts executing — so disk-based
+// scanning (e.g. history.Scan) can observe an in-progress iteration from the
+// very start, not just after its first step's outcome is recorded. The
+// OnReport callback fires synchronously immediately before the executor runs
+// the step (see runIteration's ReportStepStart), so checking for
+// context.json there proves it was written ahead of any step-outcome Save.
+func TestWorker_ContextJSONExistsBeforeFirstStepRuns(t *testing.T) {
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	_ = loop.Validate()
+	w := newWorker(t, loop, &FakePrompter{})
+
+	var sawStepStart bool
+	w.OnReport = func(r Report) {
+		if r.Kind != ReportStepStart || r.Step != "s" {
+			return
+		}
+		sawStepStart = true
+		dir := filepath.Join(w.BaseDir, "runs", "l", "iter-1")
+		if _, err := os.Stat(filepath.Join(dir, "context.json")); err != nil {
+			t.Errorf("context.json should exist before step %q runs, but got: %v", r.Step, err)
+		}
+	}
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !sawStepStart {
+		t.Fatalf("never observed a ReportStepStart for step %q", "s")
+	}
+}
+
 func TestWorker_GracefulStopEndsAfterCurrentIteration(t *testing.T) {
 	dir := t.TempDir()
 	loop := &config.Loop{
