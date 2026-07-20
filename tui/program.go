@@ -12,6 +12,7 @@ import (
 	"github.com/jbofill10/looper/builder"
 	"github.com/jbofill10/looper/client"
 	"github.com/jbofill10/looper/config"
+	"github.com/jbofill10/looper/history"
 	"github.com/jbofill10/looper/rpc"
 	"github.com/jbofill10/looper/stepauthor"
 )
@@ -55,6 +56,8 @@ func Run(ctx context.Context, cl rpc.LooperClient, conn io.Closer) error {
 		AbortLoopFn:        abortLoopFn(ctx, cl, baseDir),
 		RenameLoopFn:       renameLoopFn(ctx, cl, baseDir),
 		DeleteLoopFn:       deleteLoopFn(ctx, cl, baseDir),
+		LoadHistoryFn:      loadHistoryFn(baseDir),
+		LoadDigestFn:       loadDigestFn(),
 	})
 	p = tea.NewProgram(model)
 
@@ -396,6 +399,45 @@ func deleteLoopFn(ctx context.Context, cl rpc.LooperClient, baseDir string) func
 				return ErrMsg{Err: err}
 			}
 			return listLoopsFn(ctx, cl, baseDir)()()
+		}
+	}
+}
+
+// loadHistoryFn returns the Options.LoadHistoryFn implementation: it loads
+// loopName's step names from its loop file (to preserve config step order
+// and label steps with no digest), scans its run directory on disk via
+// history.Scan, and reports the result as a HistorySnapshotMsg.
+func loadHistoryFn(baseDir string) func(loopName string) tea.Cmd {
+	return func(loopName string) tea.Cmd {
+		return func() tea.Msg {
+			loop, err := config.LoadLoopLenient(filepath.Join(baseDir, "loops", loopName+".yaml"))
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			stepNames := make([]string, len(loop.Steps))
+			for i, s := range loop.Steps {
+				stepNames[i] = s.Name
+			}
+			entries, err := history.Scan(baseDir, loopName, stepNames)
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return HistorySnapshotMsg{LoopName: loopName, Entries: entries}
+		}
+	}
+}
+
+// loadDigestFn returns the Options.LoadDigestFn implementation: it reads one
+// step's captured digest content for a specific run-history entry via
+// history.Digest and reports it as a DigestContentMsg.
+func loadDigestFn() func(loopName string, entry history.Entry, step string) tea.Cmd {
+	return func(loopName string, entry history.Entry, step string) tea.Cmd {
+		return func() tea.Msg {
+			content, err := history.Digest(entry.Dir, step)
+			if err != nil {
+				return ErrMsg{Err: err}
+			}
+			return DigestContentMsg{Step: step, Content: content}
 		}
 	}
 }
