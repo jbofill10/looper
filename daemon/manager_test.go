@@ -542,3 +542,38 @@ func TestManager_ConcurrentManualStepsDistinctRequestIDs(t *testing.T) {
 		t.Errorf("Workers = %v, want 2 entries", runs[0].Workers)
 	}
 }
+
+func TestManager_SetScheduleEnabledPersistsWithoutStartingARun(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:     "a",
+		Schedule: &config.Schedule{Every: "1h"},
+		Steps:    []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	baseDir := writeLoopsDir(t, dir, loop)
+
+	m := newTestManager(t)
+	if err := m.SetScheduleEnabled("a", baseDir, dir, false); err != nil {
+		t.Fatalf("SetScheduleEnabled: %v", err)
+	}
+
+	if runID := m.activeRun(baseDir, "a"); runID != "" {
+		t.Errorf("SetScheduleEnabled started a run (%s), want none", runID)
+	}
+
+	registry, err := loadRegistry(m.registryPath)
+	if err != nil {
+		t.Fatalf("loadRegistry: %v", err)
+	}
+	entry := registry[registryKey(baseDir, "a")]
+	if entry.scheduleEnabled() {
+		t.Errorf("registry entry still reports schedule enabled after disabling")
+	}
+}
+
+func TestWorkdirFromBaseDir(t *testing.T) {
+	got := workdirFromBaseDir("/Users/juan/proj1/.looper")
+	if got != "/Users/juan/proj1" {
+		t.Errorf("workdirFromBaseDir = %q, want %q", got, "/Users/juan/proj1")
+	}
+}

@@ -4,8 +4,9 @@
 // path), so a per-project state file would be invisible to the daemon on
 // its own restart. Instead, one registry file — resolved the same way as
 // the socket path — tracks every (base_dir, loop_name) pair's enabled
-// flag, so AutoResume can restart them without discovering project
-// directories.
+// flag, plus every base_dir ever seen (KnownProjects, used to rediscover
+// schedules on daemon restart), so AutoResume and the schedule rescan can
+// restart/re-register without discovering project directories.
 package daemon
 
 import (
@@ -21,11 +22,29 @@ type registryEntry struct {
 	Workdir  string `json:"workdir"`
 	LoopName string `json:"loopName"`
 	Enabled  bool   `json:"enabled"`
+	// ScheduleEnabled is a *bool (not bool) so that an entry created only
+	// for the continuous Enabled flag above — which never touched
+	// scheduling — doesn't read as "schedule explicitly disabled". nil
+	// means "not yet explicitly toggled"; scheduleEnabled() below treats
+	// that as enabled, matching how a loop's schedule is enabled by
+	// default the first time it's discovered.
+	ScheduleEnabled *bool `json:"scheduleEnabled,omitempty"`
+}
+
+// scheduleEnabled reports whether e's schedule (if its loop has one) is
+// currently enabled. Absence of an explicit toggle (nil) means enabled.
+func (e registryEntry) scheduleEnabled() bool {
+	return e.ScheduleEnabled == nil || *e.ScheduleEnabled
 }
 
 // registryFile is registry.json's on-disk shape.
 type registryFile struct {
 	Loops map[string]registryEntry `json:"loops"`
+	// KnownProjects is every base_dir ever passed to Manager.ListLoops,
+	// recorded so a restarted daemon knows which project directories to
+	// rescan for schedules without waiting for a client to call ListLoops
+	// again first.
+	KnownProjects []string `json:"knownProjects,omitempty"`
 }
 
 // registryKey identifies a loop within the registry: a loop name is only
@@ -46,30 +65,31 @@ func defaultRegistryPath() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("looper-state-%d.json", os.Getuid()))
 }
 
-// loadRegistry reads and parses the registry file at path, returning an
-// empty map (not an error) if the file doesn't exist yet.
-func loadRegistry(path string) (map[string]registryEntry, error) {
+// loadRegistryFile reads and parses the whole registry file at path,
+// returning a zero-value (empty Loops map, nil KnownProjects) registryFile
+// — not an error — if the file doesn't exist yet.
+func loadRegistryFile(path string) (registryFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]registryEntry{}, nil
+			return registryFile{Loops: map[string]registryEntry{}}, nil
 		}
-		return nil, fmt.Errorf("read registry %q: %w", path, err)
+		return registryFile{}, fmt.Errorf("read registry %q: %w", path, err)
 	}
 	var rf registryFile
 	if err := json.Unmarshal(data, &rf); err != nil {
-		return nil, fmt.Errorf("parse registry %q: %w", path, err)
+		return registryFile{}, fmt.Errorf("parse registry %q: %w", path, err)
 	}
 	if rf.Loops == nil {
 		rf.Loops = map[string]registryEntry{}
 	}
-	return rf.Loops, nil
+	return rf, nil
 }
 
-// saveRegistry writes entries to path as JSON, creating any missing parent
+// saveRegistryFile writes rf to path as JSON, creating any missing parent
 // directories.
-func saveRegistry(path string, entries map[string]registryEntry) error {
-	data, err := json.MarshalIndent(registryFile{Loops: entries}, "", "  ")
+func saveRegistryFile(path string, rf registryFile) error {
+	data, err := json.MarshalIndent(rf, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal registry: %w", err)
 	}
@@ -80,4 +100,54 @@ func saveRegistry(path string, entries map[string]registryEntry) error {
 		return fmt.Errorf("write registry %q: %w", path, err)
 	}
 	return nil
+}
+
+// loadRegistry reads the registry file at path and returns just its Loops
+// map, for the many callers that only care about per-loop entries.
+func loadRegistry(path string) (map[string]registryEntry, error) {
+	rf, err := loadRegistryFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return rf.Loops, nil
+}
+
+// saveRegistry writes entries as the registry's Loops map, preserving
+// whatever KnownProjects the file already has (it reads the file first,
+// so this never clobbers KnownProjects the way a naive
+// registryFile{Loops: entries} overwrite would).
+func saveRegistry(path string, entries map[string]registryEntry) error {
+	rf, err := loadRegistryFile(path)
+	if err != nil {
+		return err
+	}
+	rf.Loops = entries
+	return saveRegistryFile(path, rf)
+}
+
+// loadKnownProjects returns every base_dir recorded via recordKnownProject,
+// or an empty slice (not an error) if the registry file doesn't exist yet.
+func loadKnownProjects(path string) ([]string, error) {
+	rf, err := loadRegistryFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return rf.KnownProjects, nil
+}
+
+// recordKnownProject appends baseDir to the registry's KnownProjects list
+// if it isn't already present. It is idempotent and a no-op write (no
+// disk write at all) when baseDir is already known.
+func recordKnownProject(path, baseDir string) error {
+	rf, err := loadRegistryFile(path)
+	if err != nil {
+		return err
+	}
+	for _, p := range rf.KnownProjects {
+		if p == baseDir {
+			return nil
+		}
+	}
+	rf.KnownProjects = append(rf.KnownProjects, baseDir)
+	return saveRegistryFile(path, rf)
 }

@@ -71,6 +71,12 @@ type LoopSnapshot struct {
 	Enabled bool
 	Steps   []string
 	RunID   string
+	// ScheduleEnabled is true only when the loop has a schedule and it is
+	// currently toggled on.
+	ScheduleEnabled bool
+	// NextRun is the loop's next scheduled firing time (RFC3339), or ""
+	// if it has no schedule or ScheduleEnabled is false.
+	NextRun string
 }
 
 // LoopsSnapshotMsg carries the current Loops-catalog snapshot, sent
@@ -142,6 +148,9 @@ type Options struct {
 	AuthorFn func(builder.AuthorRequest) tea.Cmd
 	// SetLoopEnabledFn toggles a loop's enabled state.
 	SetLoopEnabledFn func(loopName string, enabled bool) tea.Cmd
+	// SetScheduleEnabledFn toggles a loop's schedule-enabled state,
+	// independent of SetLoopEnabledFn's continuous-run toggle.
+	SetScheduleEnabledFn func(loopName string, enabled bool) tea.Cmd
 	// RunLoopOnceFn starts a loop as a one-off run.
 	RunLoopOnceFn func(loopName string) tea.Cmd
 	// StopLoopGracefulFn lets a run finish its current iteration, then stops it.
@@ -390,7 +399,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.view == viewFleet && m.loopsFocused {
 			return m.handleLoopRowKey(msg.String())
 		}
-	case "t", "o", "g", "R", "D":
+	case "t", "s", "o", "g", "R", "D":
 		if m.view == viewFleet && m.loopsFocused {
 			return m.handleLoopRowKey(msg.String())
 		}
@@ -437,10 +446,10 @@ func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
 }
 
 // handleLoopRowKey implements the Loops-section loop-row action keys: t
-// toggles enabled, o runs once, g gracefully stops an active run, x hard-
-// aborts one, R begins a rename, D begins a delete confirmation. All are
-// no-ops when the cursor isn't on a loop row, and g/x are additionally
-// no-ops when that loop has no active run.
+// toggles enabled, s toggles the schedule, o runs once, g gracefully stops
+// an active run, x hard-aborts one, R begins a rename, D begins a delete
+// confirmation. All are no-ops when the cursor isn't on a loop row, and
+// g/x are additionally no-ops when that loop has no active run.
 func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
 	rows := m.treeRows()
 	if m.treeCursor >= len(rows) || rows[m.treeCursor].Kind != "loop" {
@@ -455,6 +464,10 @@ func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
 	case "t":
 		if m.opts.SetLoopEnabledFn != nil {
 			return m, m.opts.SetLoopEnabledFn(loop.Name, !loop.Enabled)
+		}
+	case "s":
+		if m.opts.SetScheduleEnabledFn != nil {
+			return m, m.opts.SetScheduleEnabledFn(loop.Name, !loop.ScheduleEnabled)
 		}
 	case "o":
 		if m.opts.RunLoopOnceFn != nil {
@@ -658,7 +671,13 @@ func (m Model) viewFleet() string {
 				if loop.RunID != "" {
 					running = fmt.Sprintf("  running (%s)", loop.RunID)
 				}
-				fmt.Fprintf(&b, "%s%-20s %s%s\n", cursor, loop.Name, status, running)
+				sched := ""
+				if loop.ScheduleEnabled && loop.NextRun != "" {
+					sched = fmt.Sprintf("  sched:next %s", loop.NextRun)
+				} else if loop.ScheduleEnabled {
+					sched = "  sched:on"
+				}
+				fmt.Fprintf(&b, "%s%-20s %s%s%s\n", cursor, loop.Name, status, running, sched)
 			} else {
 				stepName := ""
 				if l, ok := m.loopByName(r.LoopName); ok && r.StepIndex < len(l.Steps) {
@@ -681,7 +700,7 @@ func (m Model) viewFleet() string {
 		}
 		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
 	}
-	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [tab] switch focus  [space] expand/collapse  [enter] focus  [t] toggle  [o] run once  [g] graceful stop  [x] abort  [R] rename  [D] delete  [n] new loop  [q] quit") + "\n")
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [tab] switch focus  [space] expand/collapse  [enter] focus  [t] toggle  [s] toggle schedule  [o] run once  [g] graceful stop  [x] abort  [R] rename  [D] delete  [n] new loop  [q] quit") + "\n")
 	return b.String()
 }
 

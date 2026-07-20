@@ -203,3 +203,50 @@ func TestManager_AutoResumeStartsEnabledLoops(t *testing.T) {
 		t.Fatalf("AutoResume did not start the enabled loop")
 	}
 }
+
+func TestManager_ListLoopsReportsScheduleState(t *testing.T) {
+	dir := t.TempDir()
+	baseDir := writeLoopsDir(t, dir,
+		&config.Loop{Name: "scheduled", Schedule: &config.Schedule{Every: "1h"}, Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}}},
+		&config.Loop{Name: "unscheduled", Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}}},
+	)
+
+	m := newTestManager(t)
+	// The first ListLoops call records baseDir as known but hasn't
+	// rescanned yet; call the rescan directly (bypassing the 30s ticker)
+	// so the second ListLoops call observes registered entries.
+	if _, err := m.ListLoops(baseDir); err != nil {
+		t.Fatalf("ListLoops (prime): %v", err)
+	}
+	m.rescanSchedules()
+
+	summaries, err := m.ListLoops(baseDir)
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+	// sorted by name: scheduled, unscheduled
+	if !summaries[0].ScheduleEnabled || summaries[0].NextRun.IsZero() {
+		t.Errorf("loop \"scheduled\" = %+v, want ScheduleEnabled=true with a non-zero NextRun", summaries[0])
+	}
+	if summaries[1].ScheduleEnabled || !summaries[1].NextRun.IsZero() {
+		t.Errorf("loop \"unscheduled\" = %+v, want ScheduleEnabled=false with a zero NextRun", summaries[1])
+	}
+}
+
+func TestManager_ListLoopsRecordsKnownProject(t *testing.T) {
+	dir := t.TempDir()
+	baseDir := writeLoopsDir(t, dir, &config.Loop{Name: "a", Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}}})
+
+	m := newTestManager(t)
+	if _, err := m.ListLoops(baseDir); err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+
+	projects, err := loadKnownProjects(m.registryPath)
+	if err != nil {
+		t.Fatalf("loadKnownProjects: %v", err)
+	}
+	if len(projects) != 1 || projects[0] != baseDir {
+		t.Errorf("projects = %v, want [%q]", projects, baseDir)
+	}
+}

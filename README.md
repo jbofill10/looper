@@ -128,6 +128,10 @@ concurrency: 1             # workers to run in parallel (default 1)
 max_concurrency: 1         # ceiling if concurrency is scaled up (default = concurrency)
 max_iterations: 0          # 0 = unbounded
 task_var: TASK_ID          # the output var identifying the current work unit (default TASK_ID)
+schedule:                 # optional repeating trigger; exactly one of every/at/cron
+  every: 15m               # or: "2h", "1h30m" — any time.ParseDuration string
+  # at: ["09:00", "14:00", "20:00"]   # daily times, 24-hour HH:MM
+  # cron: "0 9 * * 1-5"               # raw 5-field cron expression
 steps:
   - name: get-task
     type: script
@@ -153,6 +157,13 @@ Step types: `script`, `manual`, `headless`, `interactive` (see Concepts,
 above). `on_fail` controls what happens when a `script`/`headless` step
 fails: `ask` (default) prompts, `retry` re-runs the step, `abort` ends the
 iteration.
+
+A loop with a `schedule` is fired by looperd itself, as a fresh one-off run
+(like `RunLoopOnce`), each time the schedule ticks — for as long as
+looperd is running. If a run is already active for that loop when a tick
+fires, the tick is skipped rather than stacked. Schedules use the daemon
+process's local time zone and don't catch up on ticks missed while the
+daemon was down.
 
 ## Configuration
 
