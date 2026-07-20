@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -123,6 +124,8 @@ func TestStepValidate_Valid(t *testing.T) {
 		{Name: "a", Type: StepScript, Run: "true"},
 		{Name: "a", Type: StepHeadless, Prompt: "go"},
 		{Name: "a", Type: StepInteractive, Prompt: "go"},
+		{Name: "a", Type: StepScript, Run: "true", Outputs: []string{"X"}, Digest: "Y"},
+		{Name: "a", Type: StepHeadless, Prompt: "go", Digest: "DIGEST_FILE"},
 	}
 	for _, s := range cases {
 		if err := s.Validate(); err != nil {
@@ -149,6 +152,8 @@ func TestStepValidate_InvalidCases(t *testing.T) {
 		"headless missing prompt":    {Name: "a", Type: StepHeadless},
 		"interactive missing prompt": {Name: "a", Type: StepInteractive},
 		"bad on_fail":                {Name: "a", Type: StepScript, Run: "true", OnFail: "explode"},
+		"digest duplicates outputs":  {Name: "a", Type: StepScript, Run: "true", Outputs: []string{"D"}, Digest: "D"},
+		"digest on manual step":      {Name: "a", Type: StepManual, Digest: "D"},
 	}
 	for label, s := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -156,5 +161,76 @@ func TestStepValidate_InvalidCases(t *testing.T) {
 				t.Fatalf("expected error for %q, got nil", label)
 			}
 		})
+	}
+}
+
+func TestLoadLoopLenient_AllowsZeroStepsAndMissingFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "l.yaml")
+	if err := os.WriteFile(path, []byte("name: l\nsteps: []\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	loop, err := LoadLoopLenient(path)
+	if err != nil {
+		t.Fatalf("LoadLoopLenient: %v", err)
+	}
+	if loop.Name != "l" || len(loop.Steps) != 0 {
+		t.Errorf("loop = %+v, want Name=l Steps=[]", loop)
+	}
+}
+
+func TestLoadLoopLenient_MissingFileReturnsNotExist(t *testing.T) {
+	_, err := LoadLoopLenient(filepath.Join(t.TempDir(), "missing.yaml"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v, want wrapping os.ErrNotExist", err)
+	}
+}
+
+func TestLoop_ValidateAcceptsValidSchedule(t *testing.T) {
+	l := &Loop{
+		Name:     "a",
+		Schedule: &Schedule{Every: "15m"},
+		Steps:    []Step{{Name: "s", Type: StepScript, Run: "true"}},
+	}
+	if err := l.Validate(); err != nil {
+		t.Errorf("Validate: %v, want nil", err)
+	}
+}
+
+func TestLoop_ValidateRejectsInvalidSchedule(t *testing.T) {
+	l := &Loop{
+		Name:     "a",
+		Schedule: &Schedule{Every: "15m", Cron: "0 9 * * *"}, // two fields set
+		Steps:    []Step{{Name: "s", Type: StepScript, Run: "true"}},
+	}
+	if err := l.Validate(); err == nil {
+		t.Errorf("Validate succeeded with an invalid schedule, want an error")
+	}
+}
+
+func TestLoop_ValidateNilScheduleIsFine(t *testing.T) {
+	l := &Loop{Name: "a", Steps: []Step{{Name: "s", Type: StepScript, Run: "true"}}}
+	if err := l.Validate(); err != nil {
+		t.Errorf("Validate: %v, want nil", err)
+	}
+}
+
+func TestLoadLoop_WithScheduleField(t *testing.T) {
+	p := writeTemp(t, `
+name: nightly-report
+schedule:
+  at: ["21:00"]
+steps:
+  - name: s
+    type: script
+    run: "true"
+`)
+	loop, err := LoadLoop(p)
+	if err != nil {
+		t.Fatalf("LoadLoop: %v", err)
+	}
+	if loop.Schedule == nil || len(loop.Schedule.At) != 1 || loop.Schedule.At[0] != "21:00" {
+		t.Errorf("loop.Schedule = %+v, want At: [\"21:00\"]", loop.Schedule)
 	}
 }

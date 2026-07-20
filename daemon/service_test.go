@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/rpc"
 	"gopkg.in/yaml.v3"
 )
@@ -376,5 +377,170 @@ func TestService_ConcurrencyPropagatesToWorkerFields(t *testing.T) {
 		if !ids[want] {
 			t.Errorf("missing worker %q in %+v", want, listResp.Runs[0].Workers)
 		}
+	}
+}
+
+func TestService_ListLoopsAndSetLoopEnabled(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+
+	listResp, err := c.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: filepath.Join(dir, ".looper")})
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+	if len(listResp.Loops) != 1 || listResp.Loops[0].Enabled {
+		t.Fatalf("loops = %v, want one disabled loop", listResp.Loops)
+	}
+
+	setResp, err := c.SetLoopEnabled(ctx, &rpc.SetLoopEnabledRequest{
+		LoopName: "a", BaseDir: filepath.Join(dir, ".looper"), Workdir: dir, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SetLoopEnabled: %v", err)
+	}
+	if setResp.RunId == "" {
+		t.Fatalf("SetLoopEnabled did not return a run id")
+	}
+
+	listResp, err = c.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: filepath.Join(dir, ".looper")})
+	if err != nil {
+		t.Fatalf("ListLoops after enable: %v", err)
+	}
+	if !listResp.Loops[0].Enabled || listResp.Loops[0].RunId != setResp.RunId {
+		t.Errorf("loops after enable = %v, want enabled with run id %q", listResp.Loops, setResp.RunId)
+	}
+}
+
+func TestService_RunLoopOnce(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+	resp, err := c.RunLoopOnce(ctx, &rpc.RunLoopOnceRequest{LoopName: "a", BaseDir: filepath.Join(dir, ".looper"), Workdir: dir})
+	if err != nil {
+		t.Fatalf("RunLoopOnce: %v", err)
+	}
+	if resp.RunId == "" {
+		t.Errorf("RunLoopOnce did not return a run id")
+	}
+}
+
+func TestService_StopLoopGraceful(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+	startResp, err := c.SetLoopEnabled(ctx, &rpc.SetLoopEnabledRequest{
+		LoopName: "a", BaseDir: filepath.Join(dir, ".looper"), Workdir: dir, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SetLoopEnabled: %v", err)
+	}
+	if _, err := c.StopLoopGraceful(ctx, &rpc.StopLoopGracefulRequest{RunId: startResp.RunId}); err != nil {
+		t.Fatalf("StopLoopGraceful: %v", err)
+	}
+}
+
+func TestService_RenameAndDeleteLoop(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopYAML(t, loopsDir, "a", map[string]any{
+		"steps": []map[string]any{{"name": "s", "type": "script", "run": "true"}},
+	})
+
+	c := startTestServer(t)
+	ctx := context.Background()
+	if _, err := c.RenameLoop(ctx, &rpc.RenameLoopRequest{LoopName: "a", NewName: "b", BaseDir: filepath.Join(dir, ".looper")}); err != nil {
+		t.Fatalf("RenameLoop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(loopsDir, "b.yaml")); err != nil {
+		t.Fatalf("renamed file missing: %v", err)
+	}
+
+	if _, err := c.DeleteLoop(ctx, &rpc.DeleteLoopRequest{LoopName: "b", BaseDir: filepath.Join(dir, ".looper")}); err != nil {
+		t.Fatalf("DeleteLoop: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(loopsDir, "b.yaml")); !os.IsNotExist(err) {
+		t.Errorf("deleted file still exists")
+	}
+}
+
+func TestServer_SetScheduleEnabled(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:     "a",
+		Schedule: &config.Schedule{Every: "1h"},
+		Steps:    []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	baseDir := writeLoopsDir(t, dir, loop)
+
+	srv := NewWithGlobal(nil, "looper")
+	ctx := context.Background()
+
+	// Prime ListLoops to register baseDir
+	if _, err := srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir}); err != nil {
+		t.Fatalf("ListLoops (prime): %v", err)
+	}
+	// Rescan schedules to populate cron entries
+	srv.manager.rescanSchedules()
+
+	// Enable schedule and verify
+	if _, err := srv.SetScheduleEnabled(ctx, &rpc.SetScheduleEnabledRequest{
+		LoopName: "a", BaseDir: baseDir, Workdir: dir, Enabled: true,
+	}); err != nil {
+		t.Fatalf("SetScheduleEnabled(true): %v", err)
+	}
+
+	resp, err := srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir})
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+	if len(resp.GetLoops()) != 1 || !resp.GetLoops()[0].GetScheduleEnabled() {
+		t.Errorf("loops after enable = %v, want one loop with ScheduleEnabled=true", resp.GetLoops())
+	}
+
+	// Disable schedule and verify round-trip
+	if _, err := srv.SetScheduleEnabled(ctx, &rpc.SetScheduleEnabledRequest{
+		LoopName: "a", BaseDir: baseDir, Workdir: dir, Enabled: false,
+	}); err != nil {
+		t.Fatalf("SetScheduleEnabled(false): %v", err)
+	}
+
+	resp, err = srv.ListLoops(ctx, &rpc.ListLoopsRequest{BaseDir: baseDir})
+	if err != nil {
+		t.Fatalf("ListLoops: %v", err)
+	}
+	if len(resp.GetLoops()) != 1 || resp.GetLoops()[0].GetScheduleEnabled() {
+		t.Errorf("loops after disable = %v, want one loop with ScheduleEnabled=false", resp.GetLoops())
 	}
 }

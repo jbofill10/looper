@@ -54,10 +54,13 @@ func (e *ScriptExecutor) Run(rc *runctx.RunContext, step config.Step) (Outcome, 
 	}
 
 	// Capture declared outputs regardless of exit code.
-	if len(step.Outputs) > 0 {
+	if len(step.Outputs) > 0 || step.Digest != "" {
 		if err := captureOutputs(rc, step, outPath); err != nil {
 			return 0, err
 		}
+	}
+	if err := captureDigest(rc, step); err != nil {
+		return 0, err
 	}
 
 	if exitCode == 0 {
@@ -98,6 +101,9 @@ func captureOutputs(rc *runctx.RunContext, step config.Step, outPath string) err
 	declared := map[string]bool{}
 	for _, k := range step.Outputs {
 		declared[k] = true
+	}
+	if step.Digest != "" {
+		declared[step.Digest] = true
 	}
 	found := map[string]string{}
 	sc := bufio.NewScanner(f)

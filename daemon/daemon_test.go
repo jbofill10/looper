@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jbofill10/looper/config"
 	"github.com/jbofill10/looper/rpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -109,5 +110,45 @@ func TestServeRemovesStaleSocket(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for Serve to return after Stop")
+	}
+}
+
+func TestServer_AutoResumeDelegatesToManager(t *testing.T) {
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeLoopFile(t, loopsDir, &config.Loop{
+		Name: "a", MaxIterations: 1, Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	})
+
+	s := New()
+	s.manager.SetRegistryPath(filepath.Join(t.TempDir(), "state.json"))
+	if _, err := s.manager.SetLoopEnabled("a", filepath.Join(dir, ".looper"), dir, true); err != nil {
+		t.Fatalf("seed enable: %v", err)
+	}
+	// Simulate a fresh daemon process picking the same registry back up.
+	s2 := New()
+	s2.manager.SetRegistryPath(s.manager.registryPath)
+	if errs := s2.AutoResume(); len(errs) != 0 {
+		t.Fatalf("AutoResume errors: %v", errs)
+	}
+	// Drain updates until all runs finish (both from s and s2's AutoResume).
+	ch, unsub := s2.manager.Subscribe("")
+	defer unsub()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case u, ok := <-ch:
+			if !ok {
+				return
+			}
+			if u.Kind == "run_done" {
+				return
+			}
+		case <-time.After(time.Until(deadline)):
+			return
+		}
 	}
 }

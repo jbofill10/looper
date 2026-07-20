@@ -34,7 +34,9 @@ func writeLoopFile(t *testing.T, dir string, loop *config.Loop) string {
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	return NewManager(nil, "looper")
+	m := NewManager(nil, "looper")
+	m.SetRegistryPath(filepath.Join(t.TempDir(), "state.json"))
+	return m
 }
 
 func recvUpdate(t *testing.T, ch <-chan Update) Update {
@@ -60,6 +62,41 @@ func drainUntilRunDone(t *testing.T, ch <-chan Update) []Update {
 		if u.Kind == "run_done" {
 			return got
 		}
+	}
+}
+
+func TestManager_StopLoopGracefulFinishesCurrentIterationThenStops(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:  "l",
+		Steps: []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	path := writeLoopFile(t, dir, loop)
+
+	m := newTestManager(t)
+	ch, unsub := m.Subscribe("")
+	defer unsub()
+
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+
+	// Wait for iteration 1's outcome, then request a graceful stop.
+	for {
+		u := recvUpdate(t, ch)
+		if u.Kind == "outcome" {
+			break
+		}
+	}
+	if err := m.StopLoopGraceful(runID); err != nil {
+		t.Fatalf("StopLoopGraceful: %v", err)
+	}
+
+	updates := drainUntilRunDone(t, ch)
+	last := updates[len(updates)-1]
+	if last.State != "done" {
+		t.Errorf("final state = %q, want %q (graceful stop is a normal completion, not stopped/error)", last.State, "done")
 	}
 }
 
@@ -503,5 +540,40 @@ func TestManager_ConcurrentManualStepsDistinctRequestIDs(t *testing.T) {
 	}
 	if len(runs[0].Workers) != 2 {
 		t.Errorf("Workers = %v, want 2 entries", runs[0].Workers)
+	}
+}
+
+func TestManager_SetScheduleEnabledPersistsWithoutStartingARun(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:     "a",
+		Schedule: &config.Schedule{Every: "1h"},
+		Steps:    []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	baseDir := writeLoopsDir(t, dir, loop)
+
+	m := newTestManager(t)
+	if err := m.SetScheduleEnabled("a", baseDir, dir, false); err != nil {
+		t.Fatalf("SetScheduleEnabled: %v", err)
+	}
+
+	if runID := m.activeRun(baseDir, "a"); runID != "" {
+		t.Errorf("SetScheduleEnabled started a run (%s), want none", runID)
+	}
+
+	registry, err := loadRegistry(m.registryPath)
+	if err != nil {
+		t.Fatalf("loadRegistry: %v", err)
+	}
+	entry := registry[registryKey(baseDir, "a")]
+	if entry.scheduleEnabled() {
+		t.Errorf("registry entry still reports schedule enabled after disabling")
+	}
+}
+
+func TestWorkdirFromBaseDir(t *testing.T) {
+	got := workdirFromBaseDir("/Users/juan/proj1/.looper")
+	if got != "/Users/juan/proj1" {
+		t.Errorf("workdirFromBaseDir = %q, want %q", got, "/Users/juan/proj1")
 	}
 }

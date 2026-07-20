@@ -36,19 +36,21 @@ type Step struct {
 	Prompt        string   `yaml:"prompt,omitempty"` // interactive/headless
 	Harness       string   `yaml:"harness,omitempty"`
 	Outputs       []string `yaml:"outputs,omitempty"`
+	Digest        string   `yaml:"digest,omitempty"` // output var holding a path to this step's digest markdown file
 	SignalsNoWork bool     `yaml:"signals_no_work,omitempty"`
 	OnFail        OnFail   `yaml:"on_fail,omitempty"`
 }
 
 // Loop is an ordered list of steps run as a repeating workflow.
 type Loop struct {
-	Name           string `yaml:"name"`
-	Concurrency    int    `yaml:"concurrency,omitempty"`
-	MaxConcurrency int    `yaml:"max_concurrency,omitempty"`
-	MaxIterations  int    `yaml:"max_iterations,omitempty"`
-	Workspace      string `yaml:"workspace,omitempty"` // shared|worktree
-	TaskVar        string `yaml:"task_var,omitempty"`  // the output var identifying a work unit; defaults to TASK_ID
-	Steps          []Step `yaml:"steps"`
+	Name           string    `yaml:"name"`
+	Concurrency    int       `yaml:"concurrency,omitempty"`
+	MaxConcurrency int       `yaml:"max_concurrency,omitempty"`
+	MaxIterations  int       `yaml:"max_iterations,omitempty"`
+	Workspace      string    `yaml:"workspace,omitempty"` // shared|worktree
+	TaskVar        string    `yaml:"task_var,omitempty"`  // the output var identifying a work unit; defaults to TASK_ID
+	Schedule       *Schedule `yaml:"schedule,omitempty"`  // optional repeating trigger (see schedule.go)
+	Steps          []Step    `yaml:"steps"`
 }
 
 // LoadLoop reads, parses, and validates a loop definition file.
@@ -63,6 +65,24 @@ func LoadLoop(path string) (*Loop, error) {
 	}
 	if err := l.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid loop %q: %w", path, err)
+	}
+	return &l, nil
+}
+
+// LoadLoopLenient reads and YAML-parses the loop file at path without
+// requiring it to pass Validate (which rejects a whole file over a single
+// invalid step, or zero steps). Per-step/whole-loop validity is instead a
+// caller concern (e.g. the builder's per-step error surfacing, or the
+// Loops catalog showing a mid-edit loop rather than hiding it). Returns an
+// error wrapping os.ErrNotExist if the file doesn't exist.
+func LoadLoopLenient(path string) (*Loop, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read loop file %q: %w", path, err)
+	}
+	var l Loop
+	if err := yaml.Unmarshal(data, &l); err != nil {
+		return nil, fmt.Errorf("parse loop file %q: %w", path, err)
 	}
 	return &l, nil
 }
@@ -118,6 +138,16 @@ func (s *Step) Validate() error {
 	if (s.Type == StepInteractive || s.Type == StepHeadless) && s.Prompt == "" {
 		return fmt.Errorf("%s step requires 'prompt'", s.Type)
 	}
+	if s.Digest != "" {
+		if s.Type == StepManual {
+			return fmt.Errorf("manual step cannot have digest")
+		}
+		for _, o := range s.Outputs {
+			if o == s.Digest {
+				return fmt.Errorf("digest %q must not duplicate an outputs entry", s.Digest)
+			}
+		}
+	}
 	switch s.OnFail {
 	case "", OnFailAsk, OnFailRetry, OnFailAbort:
 	default:
@@ -145,6 +175,11 @@ func (l *Loop) Validate() error {
 	}
 	if l.TaskVar == "" {
 		l.TaskVar = "TASK_ID"
+	}
+	if l.Schedule != nil {
+		if _, err := l.Schedule.CronSpecs(); err != nil {
+			return fmt.Errorf("invalid schedule: %w", err)
+		}
 	}
 	seen := map[string]bool{}
 	for i := range l.Steps {

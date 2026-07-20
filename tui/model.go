@@ -14,8 +14,10 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 
 	"github.com/jbofill10/looper/builder"
+	"github.com/jbofill10/looper/history"
 	"github.com/jbofill10/looper/style"
 )
 
@@ -64,6 +66,42 @@ type RunSnapshot struct {
 // sent once at startup (from a ListRuns call) before the live update stream
 // catches up.
 type RunsSnapshotMsg []RunSnapshot
+
+// LoopSnapshot is a point-in-time view of one configured loop, as returned
+// by the daemon's ListLoops RPC.
+type LoopSnapshot struct {
+	Name    string
+	Path    string
+	Enabled bool
+	Steps   []string
+	RunID   string
+	// ScheduleEnabled is true only when the loop has a schedule and it is
+	// currently toggled on.
+	ScheduleEnabled bool
+	// NextRun is the loop's next scheduled firing time (RFC3339), or ""
+	// if it has no schedule or ScheduleEnabled is false.
+	NextRun string
+}
+
+// LoopsSnapshotMsg carries the current Loops-catalog snapshot, sent
+// periodically by the program wiring (see tui.Run) so the Loops section
+// stays in sync with daemon-side enable/run-once/rename/delete actions
+// taken from other clients.
+type LoopsSnapshotMsg []LoopSnapshot
+
+// HistorySnapshotMsg carries a loop's run history, as scanned from disk, in
+// response to Options.LoadHistoryFn.
+type HistorySnapshotMsg struct {
+	LoopName string
+	Entries  []history.Entry
+}
+
+// DigestContentMsg carries one step's captured digest markdown for the
+// currently viewed iteration, in response to Options.LoadDigestFn.
+type DigestContentMsg struct {
+	Step    string
+	Content string
+}
 
 // ErrMsg reports an error encountered by the program wiring (e.g. a stream
 // or RPC failure) so the Model can surface it.
@@ -123,6 +161,28 @@ type Options struct {
 	// claude session to create or edit a step (see
 	// builder.Options.AuthorFn).
 	AuthorFn func(builder.AuthorRequest) tea.Cmd
+	// SetLoopEnabledFn toggles a loop's enabled state.
+	SetLoopEnabledFn func(loopName string, enabled bool) tea.Cmd
+	// SetScheduleEnabledFn toggles a loop's schedule-enabled state,
+	// independent of SetLoopEnabledFn's continuous-run toggle.
+	SetScheduleEnabledFn func(loopName string, enabled bool) tea.Cmd
+	// RunLoopOnceFn starts a loop as a one-off run.
+	RunLoopOnceFn func(loopName string) tea.Cmd
+	// StopLoopGracefulFn lets a run finish its current iteration, then stops it.
+	StopLoopGracefulFn func(runID string) tea.Cmd
+	// AbortLoopFn hard-stops a run immediately (may interrupt an in-flight
+	// step), reusing the pre-existing StopLoop RPC.
+	AbortLoopFn func(runID string) tea.Cmd
+	// RenameLoopFn renames a loop.
+	RenameLoopFn func(loopName, newName string) tea.Cmd
+	// DeleteLoopFn deletes a loop.
+	DeleteLoopFn func(loopName string) tea.Cmd
+	// LoadHistoryFn fetches a loop's run history (scanned from its run
+	// directory on disk), for the 'h' keybinding on a Loops-catalog row.
+	LoadHistoryFn func(loopName string) tea.Cmd
+	// LoadDigestFn fetches one step's captured digest content for a
+	// specific run-history entry.
+	LoadDigestFn func(loopName string, entry history.Entry, step string) tea.Cmd
 	// Quit, if set, makes Init immediately emit tea.Quit — used by tests
 	// and tools that want a Model that never blocks on a real program run.
 	Quit bool
@@ -136,6 +196,8 @@ const (
 	viewFocus
 	viewBuilder
 	viewNaming
+	viewRuns
+	viewDigest
 )
 
 // Model is the Bubble Tea model for looper's fleet & focus TUI. It holds
@@ -159,14 +221,63 @@ type Model struct {
 	// so far, and any validation error from the last enter attempt.
 	naming    string
 	namingErr string
+
+	loops        []LoopSnapshot
+	expandedLoop string // "" = no loop expanded
+	treeCursor   int    // cursor position within treeRows()
+	loopsFocused bool   // false (zero value) = up/down/enter drive the Workers table, exactly as before this task; true = the Loops tree
+
+	renamingLoop string // "" = not renaming; else the loop name being renamed
+	renameInput  string
+	deletingLoop string // "" = no delete confirmation pending; else the loop name
+
+	loopBuilders map[string]builder.Model // lazily populated, one per loop ever expanded
+
+	history       []history.Entry
+	historyLoop   string // "" = not currently browsing any loop's history
+	historyCursor int
+
+	selectedRun   history.Entry
+	digestCursor  int
+	digestStep    string // name of the step DigestContentMsg last delivered content for
+	digestContent string
+}
+
+// treeRow is one row of the Loops section's tree: either a loop header row
+// or (when that loop is expanded) one of its step rows.
+type treeRow struct {
+	Kind      string // "loop" | "step"
+	LoopName  string
+	StepIndex int // valid only when Kind == "step"
 }
 
 // NewModel returns a Model configured with opts.
 func NewModel(opts Options) Model {
 	return Model{
-		opts:    opts,
-		workers: map[workerKey]workerRow{},
+		opts:         opts,
+		workers:      map[workerKey]workerRow{},
+		loopBuilders: map[string]builder.Model{},
 	}
+}
+
+// loopBuilder returns the builder.Model backing loopName's inline step
+// list, constructing it (via builder.New, against that loop's own file —
+// see LoopSnapshot.Path) the first time it's needed, and caching it so
+// cursor/authoring state survives collapsing and re-expanding the loop.
+func (m *Model) loopBuilder(loopName string) (builder.Model, bool) {
+	if b, ok := m.loopBuilders[loopName]; ok {
+		return b, true
+	}
+	loop, ok := m.loopByName(loopName)
+	if !ok {
+		return builder.Model{}, false
+	}
+	b, err := builder.New(m.opts.ProjectDir, loop.Path, builder.Options{AuthorFn: m.opts.AuthorFn})
+	if err != nil {
+		return builder.Model{}, false
+	}
+	m.loopBuilders[loopName] = b
+	return b, true
 }
 
 // Init implements tea.Model. It emits tea.Quit immediately if
@@ -187,9 +298,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RunsSnapshotMsg:
 		m.applyRunsSnapshot(msg)
 		return m, nil
+	case LoopsSnapshotMsg:
+		m.loops = []LoopSnapshot(msg)
+		if rows := m.treeRows(); m.treeCursor >= len(rows) {
+			m.treeCursor = len(rows) - 1
+		}
+		if m.treeCursor < 0 {
+			m.treeCursor = 0
+		}
+		return m, nil
+	case HistorySnapshotMsg:
+		if msg.LoopName == m.historyLoop {
+			m.history = msg.Entries
+			if m.historyCursor >= len(m.history) {
+				m.historyCursor = len(m.history) - 1
+			}
+			if m.historyCursor < 0 {
+				m.historyCursor = 0
+			}
+		}
+		return m, nil
+	case DigestContentMsg:
+		m.digestStep = msg.Step
+		m.digestContent = msg.Content
+		return m, nil
+	case ErrMsg:
+		m.builderMsg = fmt.Sprintf("error: %v", msg.Err)
+		return m, nil
 	case tea.KeyMsg:
 		if m.view == viewNaming {
 			return m.handleNamingKey(msg)
+		}
+		if m.renamingLoop != "" {
+			return m.handleRenameKey(msg)
+		}
+		if m.deletingLoop != "" {
+			return m.handleDeleteConfirmKey(msg)
 		}
 		if m.view == viewBuilder {
 			return m.handleBuilderKey(msg)
@@ -201,6 +345,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.builder = next.(builder.Model)
 			return m, cmd
 		}
+		if m.expandedLoop != "" {
+			if b, ok := m.loopBuilders[m.expandedLoop]; ok {
+				next, cmd := b.Update(msg)
+				m.loopBuilders[m.expandedLoop] = next.(builder.Model)
+				return m, cmd
+			}
+		}
 		return m, nil
 	}
 	return m, nil
@@ -209,8 +360,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleKey implements the TUI's keyboard navigation and decision/attach
 // actions:
 //
-//	up/k, down/j    move the cursor in the fleet view
-//	enter           focus the selected worker
+//	up/k, down/j    move the cursor: the Workers table by default, or the
+//	                Loops tree when tab has given it focus
+//	tab             toggle up/down/enter focus between the Workers table
+//	                and the Loops tree (fleet view only)
+//	space           expand/collapse the Loops tree's selected loop row
+//	enter           focus the selected worker (only when the Workers table
+//	                has focus, i.e. loopsFocused is false)
 //	esc             return to the fleet view
 //	q, ctrl+c       quit
 //	a/r/x           in focus with a pending decision, respond
@@ -221,35 +377,128 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
-		if m.view == viewFleet && m.cursor > 0 {
-			m.cursor--
+		switch m.view {
+		case viewFleet:
+			if m.loopsFocused {
+				if m.treeCursor > 0 {
+					m.treeCursor--
+				}
+			} else if m.cursor > 0 {
+				m.cursor--
+			}
+		case viewRuns:
+			if m.historyCursor > 0 {
+				m.historyCursor--
+			}
+		case viewDigest:
+			if m.digestCursor > 0 {
+				m.digestCursor--
+			}
 		}
 	case "down", "j":
-		if m.view == viewFleet {
-			if last := len(m.Workers()) - 1; m.cursor < last {
+		switch m.view {
+		case viewFleet:
+			if m.loopsFocused {
+				if last := len(m.treeRows()) - 1; m.treeCursor < last {
+					m.treeCursor++
+				}
+			} else if last := len(m.Workers()) - 1; m.cursor < last {
 				m.cursor++
+			}
+		case viewRuns:
+			if last := len(m.history) - 1; m.historyCursor < last {
+				m.historyCursor++
+			}
+		case viewDigest:
+			if last := len(m.selectedRun.Steps) - 1; m.digestCursor < last {
+				m.digestCursor++
+			}
+		}
+	case "tab":
+		if m.view == viewFleet {
+			m.loopsFocused = !m.loopsFocused
+		}
+	case " ":
+		if m.view == viewFleet && m.loopsFocused {
+			rows := m.treeRows()
+			if m.treeCursor < len(rows) && rows[m.treeCursor].Kind == "loop" {
+				name := rows[m.treeCursor].LoopName
+				if m.expandedLoop == name {
+					m.expandedLoop = ""
+				} else {
+					m.expandedLoop = name
+				}
 			}
 		}
 	case "enter":
-		if m.view == viewFleet {
+		switch m.view {
+		case viewFleet:
+			if m.loopsFocused {
+				break
+			}
 			rows := m.Workers()
 			if m.cursor < len(rows) {
 				row := rows[m.cursor]
 				m.focusRun, m.focusWorker = row.RunID, row.WorkerID
 				m.view = viewFocus
 			}
+		case viewRuns:
+			if m.historyCursor < len(m.history) {
+				m.selectedRun = m.history[m.historyCursor]
+				m.digestCursor = 0
+				m.digestStep = ""
+				m.digestContent = ""
+				m.view = viewDigest
+			}
+		case viewDigest:
+			if m.digestCursor < len(m.selectedRun.Steps) {
+				step := m.selectedRun.Steps[m.digestCursor]
+				if step.HasDigest && m.opts.LoadDigestFn != nil {
+					return m, m.opts.LoadDigestFn(m.historyLoop, m.selectedRun, step.Name)
+				}
+			}
 		}
 	case "esc":
-		m.view = viewFleet
+		switch m.view {
+		case viewDigest:
+			m.view = viewRuns
+		case viewRuns:
+			m.view = viewFleet
+			m.historyLoop = ""
+			m.history = nil
+		default:
+			m.view = viewFleet
+		}
 	case "n":
 		if m.view == viewFleet {
 			m.naming = ""
 			m.namingErr = ""
 			m.view = viewNaming
 		}
-	case "a", "r", "x":
+	case "a", "r":
 		if m.view == viewFocus {
 			return m.handleFocusKey(msg.String())
+		}
+	case "x":
+		// "x" is shared: focus-view decision-abort (a/r/x) and the Loops
+		// tree's hard-abort key. The two conditions are mutually exclusive
+		// (view can't be both viewFocus and viewFleet), so they're merged
+		// into a single case — Go forbids a duplicate case value in the
+		// same switch, which the brief's literal `case "a", "r", "x":` /
+		// `case "t", "o", "g", "x", "R", "D":` split would have produced.
+		if m.view == viewFocus {
+			return m.handleFocusKey(msg.String())
+		}
+		if m.view == viewFleet && m.loopsFocused {
+			return m.handleLoopRowKey(msg.String())
+		}
+	case "t", "s", "o", "g", "h", "R", "D":
+		if m.view == viewFleet && m.loopsFocused {
+			return m.handleLoopRowKey(msg.String())
+		}
+	case "c", "e", "d", "shift+up", "shift+down":
+		if m.view == viewFleet && m.loopsFocused && m.expandedLoop != "" {
+			return m.handleExpandedLoopStepKey(msg)
 		}
 	}
 	return m, nil
@@ -336,6 +585,126 @@ func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleLoopRowKey implements the Loops-section loop-row action keys: t
+// toggles enabled, s toggles the schedule, o runs once, g gracefully stops
+// an active run, x hard-aborts one, h opens that loop's run history
+// (viewRuns), R begins a rename, D begins a delete confirmation. All are
+// no-ops when the cursor isn't on a loop row, and g/x are additionally
+// no-ops when that loop has no active run.
+func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
+	rows := m.treeRows()
+	if m.treeCursor >= len(rows) || rows[m.treeCursor].Kind != "loop" {
+		return m, nil
+	}
+	loop, ok := m.loopByName(rows[m.treeCursor].LoopName)
+	if !ok {
+		return m, nil
+	}
+
+	switch k {
+	case "t":
+		if m.opts.SetLoopEnabledFn != nil {
+			return m, m.opts.SetLoopEnabledFn(loop.Name, !loop.Enabled)
+		}
+	case "s":
+		if m.opts.SetScheduleEnabledFn != nil {
+			return m, m.opts.SetScheduleEnabledFn(loop.Name, !loop.ScheduleEnabled)
+		}
+	case "o":
+		if m.opts.RunLoopOnceFn != nil {
+			return m, m.opts.RunLoopOnceFn(loop.Name)
+		}
+	case "g":
+		if loop.RunID != "" && m.opts.StopLoopGracefulFn != nil {
+			return m, m.opts.StopLoopGracefulFn(loop.RunID)
+		}
+	case "x":
+		if loop.RunID != "" && m.opts.AbortLoopFn != nil {
+			return m, m.opts.AbortLoopFn(loop.RunID)
+		}
+	case "h":
+		if m.opts.LoadHistoryFn != nil {
+			m.historyLoop = loop.Name
+			m.history = nil
+			m.historyCursor = 0
+			m.view = viewRuns
+			return m, m.opts.LoadHistoryFn(loop.Name)
+		}
+	case "R":
+		m.renamingLoop = loop.Name
+		m.renameInput = loop.Name
+	case "D":
+		m.deletingLoop = loop.Name
+	}
+	return m, nil
+}
+
+// handleExpandedLoopStepKey forwards a step-list key (c/e/d/shift+up/
+// shift+down) to the expanded loop's embedded builder.Model, positioning
+// that builder's own cursor at the tree's currently-selected step row
+// first (if the cursor is on a step row of this loop) so the forwarded
+// key acts on the right step.
+func (m Model) handleExpandedLoopStepKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	b, ok := m.loopBuilder(m.expandedLoop)
+	if !ok {
+		return m, nil
+	}
+
+	rows := m.treeRows()
+	if m.treeCursor < len(rows) {
+		row := rows[m.treeCursor]
+		if row.Kind == "step" && row.LoopName == m.expandedLoop {
+			b = b.WithCursor(row.StepIndex)
+		}
+	}
+
+	next, cmd := b.Update(key)
+	m.loopBuilders[m.expandedLoop] = next.(builder.Model)
+	return m, cmd
+}
+
+// handleRenameKey handles the rename-loop input stage entered via R:
+// printable runes append to renameInput, backspace removes the last rune,
+// esc cancels, enter confirms and invokes RenameLoopFn.
+func (m Model) handleRenameKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch key.String() {
+	case "esc":
+		m.renamingLoop = ""
+		m.renameInput = ""
+		return m, nil
+	case "backspace":
+		if r := []rune(m.renameInput); len(r) > 0 {
+			m.renameInput = string(r[:len(r)-1])
+		}
+		return m, nil
+	case "enter":
+		newName := strings.TrimSpace(m.renameInput)
+		oldName := m.renamingLoop
+		m.renamingLoop = ""
+		m.renameInput = ""
+		if newName == "" || m.opts.RenameLoopFn == nil {
+			return m, nil
+		}
+		return m, m.opts.RenameLoopFn(oldName, newName)
+	}
+	if key.Type == tea.KeyRunes {
+		m.renameInput += string(key.Runes)
+	}
+	return m, nil
+}
+
+// handleDeleteConfirmKey handles the delete-loop confirmation stage
+// entered via D: y confirms and invokes DeleteLoopFn, any other key
+// cancels.
+func (m Model) handleDeleteConfirmKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	name := m.deletingLoop
+	m.deletingLoop = ""
+	if key.String() == "y" && m.opts.DeleteLoopFn != nil {
+		return m, m.opts.DeleteLoopFn(name)
+	}
+	return m, nil
+}
+
 // handleBuilderKey routes a key press while the embedded file-backed loop
 // builder (viewBuilder) is active: ctrl+c quits the whole program, esc
 // discards the in-progress builder and returns to the fleet view (the
@@ -393,6 +762,12 @@ func glyph(row workerRow) string {
 
 // View implements tea.Model, rendering the fleet, focus, or builder view.
 func (m Model) View() string {
+	switch {
+	case m.renamingLoop != "":
+		return m.viewRenameLoop()
+	case m.deletingLoop != "":
+		return m.viewDeleteConfirm()
+	}
 	switch m.view {
 	case viewFocus:
 		return m.viewFocus()
@@ -400,6 +775,10 @@ func (m Model) View() string {
 		return m.viewBuilder()
 	case viewNaming:
 		return m.viewNaming()
+	case viewRuns:
+		return m.viewRuns()
+	case viewDigest:
+		return m.viewDigest()
 	default:
 		return m.viewFleet()
 	}
@@ -429,14 +808,71 @@ func (m Model) viewFleet() string {
 		}
 		fmt.Fprintf(&b, "%s\n\n", msgStyle.Render(m.builderMsg))
 	}
+	if len(m.loops) > 0 {
+		b.WriteString(style.SubHeader.Render("Loops") + "\n")
+		treeRows := m.treeRows()
+		for i, r := range treeRows {
+			cursor := "  "
+			if m.loopsFocused && i == m.treeCursor {
+				cursor = style.Marker.Render("▸ ")
+			}
+			if r.Kind == "loop" {
+				loop, _ := m.loopByName(r.LoopName)
+				status := "[off]"
+				if loop.Enabled {
+					status = "[on]"
+				}
+				running := ""
+				if loop.RunID != "" {
+					running = fmt.Sprintf("  running (%s)", loop.RunID)
+				}
+				sched := ""
+				if loop.ScheduleEnabled && loop.NextRun != "" {
+					sched = fmt.Sprintf("  sched:next %s", loop.NextRun)
+				} else if loop.ScheduleEnabled {
+					sched = "  sched:on"
+				}
+				fmt.Fprintf(&b, "%s%-20s %s%s%s\n", cursor, loop.Name, status, running, sched)
+			} else {
+				stepName := ""
+				if l, ok := m.loopByName(r.LoopName); ok && r.StepIndex < len(l.Steps) {
+					stepName = l.Steps[r.StepIndex]
+				}
+				if bm, ok := m.loopBuilders[r.LoopName]; ok {
+					if steps := bm.Steps(); r.StepIndex < len(steps) {
+						stepName = fmt.Sprintf("%s (%s)", steps[r.StepIndex].Name, steps[r.StepIndex].Type)
+					}
+				}
+				fmt.Fprintf(&b, "%s    %d. %s\n", cursor, r.StepIndex+1, stepName)
+			}
+		}
+		b.WriteString("\n")
+	}
 	for i, r := range rows {
 		cursor := "  "
-		if i == m.cursor {
+		if !m.loopsFocused && i == m.cursor {
 			cursor = style.Marker.Render("▸ ")
 		}
 		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
 	}
-	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] focus  [n] new loop  [q] quit") + "\n")
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [tab] switch focus  [space] expand/collapse  [enter] focus  [t] toggle  [s] toggle schedule  [o] run once  [g] graceful stop  [x] abort  [R] rename  [D] delete  [n] new loop  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewRenameLoop renders the rename-loop input prompt entered via R.
+func (m Model) viewRenameLoop() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("Rename loop %q", m.renamingLoop)))
+	fmt.Fprintf(&b, "%s %s\n", style.Label.Render("New name:"), m.renameInput)
+	b.WriteString("\n" + style.KeyHint.Render("[enter] confirm  [esc] cancel") + "\n")
+	return b.String()
+}
+
+// viewDeleteConfirm renders the delete-loop confirmation prompt entered via D.
+func (m Model) viewDeleteConfirm() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.TitleAlert.Render(fmt.Sprintf("Delete loop %q?", m.deletingLoop)))
+	b.WriteString("\n" + style.KeyHint.Render("[y] confirm  [any other key] cancel") + "\n")
 	return b.String()
 }
 
@@ -458,6 +894,92 @@ func (m Model) viewFocus() string {
 		b.WriteString("\n" + style.Action.Render("[a] attach") + "\n")
 	}
 	b.WriteString("\n" + style.KeyHint.Render("[esc] back  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewRuns renders the run-history list for m.historyLoop: one row per
+// iteration found on disk, newest first, with a ▸ cursor on the selected
+// row and a status glyph (running/done/aborted/no-work).
+func (m Model) viewRuns() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · run history", m.historyLoop)))
+	if len(m.history) == 0 {
+		b.WriteString("(no runs yet, or still loading)\n")
+	}
+	for i, e := range m.history {
+		cursor := "  "
+		if i == m.historyCursor {
+			cursor = style.Marker.Render("▸ ")
+		}
+		worker := e.WorkerID
+		if worker == "" {
+			worker = "-"
+		}
+		fmt.Fprintf(&b, "%s%-24s %-8s %s\n", cursor, e.IterationID, worker, historyStatusGlyph(e.Status))
+	}
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] view digests  [esc] back") + "\n")
+	return b.String()
+}
+
+// historyStatusGlyph renders a run-history entry's status as a glyph +
+// label, reusing the style package's existing glyph colors.
+func historyStatusGlyph(status string) string {
+	switch status {
+	case "running":
+		return style.GlyphRunning.Render("⚙ running")
+	case "done":
+		return style.GlyphDone.Render("✔ done")
+	case "aborted":
+		return style.GlyphNeedsYou.Render("✗ aborted")
+	case "no-work":
+		return style.GlyphEmpty.Render("∅ no-work")
+	default:
+		return status
+	}
+}
+
+// viewDigest renders m.selectedRun's steps (in loop config order, with a
+// marker for which captured a digest) and, once loaded via Options.
+// LoadDigestFn, the currently selected step's rendered markdown digest.
+func (m Model) viewDigest() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · %s", m.historyLoop, m.selectedRun.IterationID)))
+
+	for i, s := range m.selectedRun.Steps {
+		cursor := "  "
+		if i == m.digestCursor {
+			cursor = style.Marker.Render("▸ ")
+		}
+		marker := " "
+		if s.HasDigest {
+			marker = "●"
+		}
+		line := fmt.Sprintf("%s%s %s", cursor, marker, s.Name)
+		if !s.HasDigest {
+			line = style.KeyHint.Render(line)
+		}
+		fmt.Fprintf(&b, "%s\n", line)
+	}
+	b.WriteString("\n")
+
+	switch {
+	case len(m.selectedRun.Steps) == 0:
+		b.WriteString("(no steps)\n")
+	case m.digestCursor >= len(m.selectedRun.Steps):
+		// out of range; nothing to show
+	case !m.selectedRun.Steps[m.digestCursor].HasDigest:
+		b.WriteString(style.KeyHint.Render("(no digest for this step)") + "\n")
+	case m.digestStep != m.selectedRun.Steps[m.digestCursor].Name:
+		b.WriteString(style.KeyHint.Render("(press enter to load)") + "\n")
+	default:
+		rendered, err := glamour.Render(m.digestContent, "auto")
+		if err != nil {
+			rendered = m.digestContent
+		}
+		b.WriteString(rendered)
+	}
+
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] load digest  [esc] back") + "\n")
 	return b.String()
 }
 
@@ -588,6 +1110,37 @@ func (m Model) Workers() []workerRow {
 		return a.WorkerID < b.WorkerID
 	})
 	return rows
+}
+
+// treeRows returns the Loops section's current flattened row list: one
+// "loop" row per configured loop (sorted as delivered by ListLoops, i.e.
+// by name), plus — for whichever loop is expanded — a "step" row per step
+// in order, interleaved right after that loop's row.
+func (m Model) treeRows() []treeRow {
+	var rows []treeRow
+	for _, l := range m.loops {
+		rows = append(rows, treeRow{Kind: "loop", LoopName: l.Name})
+		if l.Name == m.expandedLoop {
+			n := len(l.Steps)
+			if b, ok := m.loopBuilders[l.Name]; ok {
+				n = len(b.Steps())
+			}
+			for i := 0; i < n; i++ {
+				rows = append(rows, treeRow{Kind: "step", LoopName: l.Name, StepIndex: i})
+			}
+		}
+	}
+	return rows
+}
+
+// loopByName returns the LoopSnapshot named name, and whether one exists.
+func (m Model) loopByName(name string) (LoopSnapshot, bool) {
+	for _, l := range m.loops {
+		if l.Name == name {
+			return l, true
+		}
+	}
+	return LoopSnapshot{}, false
 }
 
 // NeedYouCount returns the number of workers with a pending decision

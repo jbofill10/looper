@@ -79,6 +79,12 @@ type Worker struct {
 	// once cancelled, Run returns Ctx.Err() promptly.
 	Ctx context.Context
 
+	// GracefulStop, if set, is checked once per iteration boundary (before
+	// starting the next iteration). Once closed, Run returns nil after the
+	// in-flight iteration completes — unlike Ctx, it never cancels a
+	// context or interrupts a step already in progress.
+	GracefulStop <-chan struct{}
+
 	// ResumeDir, if set, names an existing iteration directory (with a
 	// context.json and, optionally, a progress.json) to resume instead of
 	// starting the first iteration fresh: the persisted context is loaded,
@@ -133,6 +139,19 @@ func (w *Worker) ctxErr() error {
 	return nil
 }
 
+// gracefulStopped reports whether w.GracefulStop is set and closed.
+func (w *Worker) gracefulStopped() bool {
+	if w.GracefulStop == nil {
+		return false
+	}
+	select {
+	case <-w.GracefulStop:
+		return true
+	default:
+		return false
+	}
+}
+
 func (w *Worker) idGen() func() string {
 	if w.NewID != nil {
 		return w.NewID
@@ -158,6 +177,9 @@ func (w *Worker) run() error {
 	for iter := 1; w.Loop.MaxIterations == 0 || iter <= w.Loop.MaxIterations; iter++ {
 		if err := w.ctxErr(); err != nil {
 			return err
+		}
+		if w.gracefulStopped() {
+			return nil
 		}
 		id := gen()
 		w.report(Report{Kind: ReportIteration, Iteration: iter})
@@ -219,6 +241,15 @@ func (w *Worker) runIteration(iter int, id string, resumeDir string) (stop bool,
 			return false, err
 		}
 		rc.Set("WORKDIR", w.Workdir)
+		// Persist context.json immediately so the iteration is visible to
+		// disk-based scanning (e.g. history.Scan) as soon as its directory
+		// exists, rather than only after its first step's outcome is
+		// recorded. Steps may take a long time (headless/interactive), so
+		// without this the run would be invisible in the TUI's run-history
+		// view until the first step finished.
+		if err := rc.Save(); err != nil {
+			return false, err
+		}
 	}
 
 	var digest strings.Builder

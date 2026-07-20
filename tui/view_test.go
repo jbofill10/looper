@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jbofill10/looper/builder"
+	"github.com/jbofill10/looper/history"
 )
 
 // key builds a synthetic tea.KeyMsg for the given single-character or named
@@ -339,5 +340,198 @@ func TestView_FleetFooterMentionsNewLoopKey(t *testing.T) {
 	m := twoWorkerModel()
 	if !strings.Contains(m.View(), "[n] new loop") {
 		t.Fatalf("fleet footer missing new-loop hint:\n%s", m.View())
+	}
+}
+
+func TestView_FleetShowsLoopsSection(t *testing.T) {
+	m := NewModel(Options{})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "jira-tracker", Enabled: true, Steps: []string{"s1"}}})
+	m = next.(Model)
+
+	out := m.View()
+	if !strings.Contains(out, "Loops") || !strings.Contains(out, "jira-tracker") || !strings.Contains(out, "[on]") {
+		t.Errorf("View() = %q, want a Loops section listing jira-tracker as [on]", out)
+	}
+}
+
+func TestView_ToggleEnabledKeyInvokesSetLoopEnabledFn(t *testing.T) {
+	var gotName string
+	var gotEnabled bool
+	m := NewModel(Options{
+		SetLoopEnabledFn: func(name string, enabled bool) tea.Cmd {
+			gotName, gotEnabled = name, enabled
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", Enabled: false}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // loop-row keys require the Loops tree focused
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	if gotName != "a" || gotEnabled != true {
+		t.Errorf("SetLoopEnabledFn called with (%q, %v), want (\"a\", true)", gotName, gotEnabled)
+	}
+}
+
+func TestView_FleetShowsScheduleInfo(t *testing.T) {
+	m := NewModel(Options{})
+	next, _ := m.Update(LoopsSnapshotMsg{
+		{Name: "nightly", ScheduleEnabled: true, NextRun: "2026-07-17T21:00:00Z"},
+	})
+	m = next.(Model)
+
+	out := m.View()
+	if !strings.Contains(out, "2026-07-17T21:00:00Z") {
+		t.Errorf("View() = %q, want it to show the loop's NextRun", out)
+	}
+}
+
+func TestView_ToggleScheduleKeyInvokesSetScheduleEnabledFn(t *testing.T) {
+	var gotName string
+	var gotEnabled bool
+	m := NewModel(Options{
+		SetScheduleEnabledFn: func(name string, enabled bool) tea.Cmd {
+			gotName, gotEnabled = name, enabled
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", ScheduleEnabled: false}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // loop-row keys require the Loops tree focused
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if gotName != "a" || gotEnabled != true {
+		t.Errorf("SetScheduleEnabledFn called with (%q, %v), want (\"a\", true)", gotName, gotEnabled)
+	}
+}
+
+func TestView_RunOnceKeyInvokesRunLoopOnceFn(t *testing.T) {
+	var got string
+	m := NewModel(Options{RunLoopOnceFn: func(name string) tea.Cmd { got = name; return nil }})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a"}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got != "a" {
+		t.Errorf("RunLoopOnceFn called with %q, want \"a\"", got)
+	}
+}
+
+func TestView_GracefulAndHardStopKeysOnlyActWithAnActiveRun(t *testing.T) {
+	var gracefulCalled, abortCalled bool
+	m := NewModel(Options{
+		StopLoopGracefulFn: func(runID string) tea.Cmd { gracefulCalled = true; return nil },
+		AbortLoopFn:        func(runID string) tea.Cmd { abortCalled = true; return nil },
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a"}}) // no RunID: not running
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if gracefulCalled || abortCalled {
+		t.Errorf("graceful/hard stop must be no-ops on a non-running loop")
+	}
+
+	next, _ = m.Update(LoopsSnapshotMsg{{Name: "a", RunID: "run-001"}}) // loopsFocused survives this update
+	m = next.(Model)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	if !gracefulCalled {
+		t.Errorf("'g' on a running loop must call StopLoopGracefulFn")
+	}
+}
+
+func TestView_ExpandedLoopForwardsCreateStepKeyToEmbeddedBuilder(t *testing.T) {
+	dir := t.TempDir()
+	loopsDir := filepath.Join(dir, ".looper", "loops")
+	if err := os.MkdirAll(loopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	loopPath := filepath.Join(loopsDir, "a.yaml")
+	if err := os.WriteFile(loopPath, []byte("name: a\nsteps: []\n"), 0o644); err != nil {
+		t.Fatalf("write loop: %v", err)
+	}
+
+	var authorReq builder.AuthorRequest
+	m := NewModel(Options{
+		ProjectDir: dir,
+		AuthorFn: func(req builder.AuthorRequest) tea.Cmd {
+			authorReq = req
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", Path: loopPath, Steps: nil}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // focus the Loops tree
+	m = next.(Model)
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace}) // expand
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")}) // create-step
+	m = next.(Model)
+
+	if authorReq.LoopPath != loopPath {
+		t.Errorf("AuthorFn called with LoopPath %q, want %q (create-step key must forward to the expanded loop's embedded builder)", authorReq.LoopPath, loopPath)
+	}
+}
+
+func TestViewRuns_ListsEntriesWithCursorAndStatus(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewRuns
+	m.historyLoop = "loop1"
+	m.history = []history.Entry{
+		{IterationID: "iter-2", WorkerID: "w1", Status: "done"},
+		{IterationID: "iter-1", WorkerID: "w1", Status: "running"},
+	}
+	out := m.View()
+	if !strings.Contains(out, "loop1") {
+		t.Fatalf("viewRuns missing loop name:\n%s", out)
+	}
+	if !strings.Contains(out, "iter-2") || !strings.Contains(out, "iter-1") {
+		t.Fatalf("viewRuns missing iteration rows:\n%s", out)
+	}
+	if !strings.Contains(out, "▸") {
+		t.Fatalf("viewRuns missing cursor glyph:\n%s", out)
+	}
+}
+
+func TestViewDigest_ListsStepsAndRendersLoadedContent(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewDigest
+	m.historyLoop = "loop1"
+	m.selectedRun = history.Entry{
+		IterationID: "iter-1",
+		Steps: []history.StepDigest{
+			{Name: "get-tasks", HasDigest: false},
+			{Name: "plan", HasDigest: true},
+		},
+	}
+	m.digestCursor = 1
+	m.digestStep = "plan"
+	m.digestContent = "# Plan\n\nDid the thing."
+
+	out := m.View()
+	if !strings.Contains(out, "get-tasks") || !strings.Contains(out, "plan") {
+		t.Fatalf("viewDigest missing step names:\n%s", out)
+	}
+	if !strings.Contains(out, "Did the thing.") {
+		t.Fatalf("viewDigest missing rendered digest content:\n%s", out)
+	}
+}
+
+func TestViewDigest_NoDigestForSelectedStepShowsPlaceholder(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewDigest
+	m.selectedRun = history.Entry{
+		Steps: []history.StepDigest{{Name: "get-tasks", HasDigest: false}},
+	}
+	out := m.View()
+	if !strings.Contains(out, "no digest") {
+		t.Fatalf("viewDigest missing no-digest placeholder:\n%s", out)
 	}
 }

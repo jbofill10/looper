@@ -70,10 +70,13 @@ func (e *HeadlessExecutor) Run(rc *runctx.RunContext, step config.Step) (Outcome
 	}
 
 	// Capture declared outputs regardless of exit code.
-	if len(step.Outputs) > 0 {
+	if len(step.Outputs) > 0 || step.Digest != "" {
 		if err := captureOutputs(rc, step, outPath); err != nil {
 			return 0, err
 		}
+	}
+	if err := captureDigest(rc, step); err != nil {
+		return 0, err
 	}
 
 	if exitCode == 0 {

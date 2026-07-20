@@ -82,7 +82,7 @@ type Model struct {
 // builder's whole purpose is to keep showing that file's steps — flagging
 // the bad one via StepErrors — rather than refusing to load it at all.
 func New(projectDir, loopPath string, opts Options) (Model, error) {
-	loop, err := loadLoopLenient(loopPath)
+	loop, err := config.LoadLoopLenient(loopPath)
 	freshLoop := false
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -109,23 +109,6 @@ func New(projectDir, loopPath string, opts Options) (Model, error) {
 	}
 	m.revalidate()
 	return m, nil
-}
-
-// loadLoopLenient reads and parses the loop file at path without
-// requiring it to pass config.Loop.Validate (which rejects the whole file
-// on any single invalid step, or on having zero steps). Per-step validity
-// is instead computed independently via revalidate/StepErrors, so a
-// partially invalid file still loads and displays.
-func loadLoopLenient(path string) (*config.Loop, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var l config.Loop
-	if err := yaml.Unmarshal(data, &l); err != nil {
-		return nil, fmt.Errorf("parse loop file %q: %w", path, err)
-	}
-	return &l, nil
 }
 
 // writeLoopFile marshals l to YAML and writes it to path, creating any
@@ -226,6 +209,24 @@ func (m *Model) revalidate() {
 	m.stepErrors = errs
 }
 
+// WithCursor returns m with its cursor set to i, clamped to a valid step
+// index. Used by embedders (e.g. the fleet TUI's inline step list) that
+// track their own selection and need the builder's next c/e/d/reorder key
+// to act on that same step.
+func (m Model) WithCursor(i int) Model {
+	if i < 0 {
+		i = 0
+	}
+	if max := len(m.loop.Steps) - 1; i > max {
+		i = max
+	}
+	if i < 0 {
+		i = 0
+	}
+	m.cursor = i
+	return m
+}
+
 // Init implements tea.Model. The builder has no initial command.
 func (m Model) Init() tea.Cmd {
 	return nil
@@ -240,7 +241,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errMsg = fmt.Sprintf("authoring session failed: %v", msg.Err)
 			return m, nil
 		}
-		reloaded, err := loadLoopLenient(m.loopPath)
+		reloaded, err := config.LoadLoopLenient(m.loopPath)
 		if err != nil {
 			// The file may be mid-edit and momentarily invalid; keep the
 			// last good in-memory copy but surface the reload error.
