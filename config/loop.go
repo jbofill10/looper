@@ -36,6 +36,7 @@ type Step struct {
 	Prompt        string   `yaml:"prompt,omitempty"` // interactive/headless
 	Harness       string   `yaml:"harness,omitempty"`
 	Outputs       []string `yaml:"outputs,omitempty"`
+	Digest        string   `yaml:"digest,omitempty"` // output var holding a path to this step's digest markdown file
 	SignalsNoWork bool     `yaml:"signals_no_work,omitempty"`
 	OnFail        OnFail   `yaml:"on_fail,omitempty"`
 }
@@ -135,6 +136,16 @@ func (s *Step) Validate() error {
 	}
 	if (s.Type == StepInteractive || s.Type == StepHeadless) && s.Prompt == "" {
 		return fmt.Errorf("%s step requires 'prompt'", s.Type)
+	}
+	if s.Digest != "" {
+		if s.Type == StepManual {
+			return fmt.Errorf("manual step cannot have digest")
+		}
+		for _, o := range s.Outputs {
+			if o == s.Digest {
+				return fmt.Errorf("digest %q must not duplicate an outputs entry", s.Digest)
+			}
+		}
 	}
 	switch s.OnFail {
 	case "", OnFailAsk, OnFailRetry, OnFailAbort:
