@@ -19,20 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Looper_Ping_FullMethodName             = "/looper.v1.Looper/Ping"
-	Looper_Shutdown_FullMethodName         = "/looper.v1.Looper/Shutdown"
-	Looper_StartLoop_FullMethodName        = "/looper.v1.Looper/StartLoop"
-	Looper_StopLoop_FullMethodName         = "/looper.v1.Looper/StopLoop"
-	Looper_ListRuns_FullMethodName         = "/looper.v1.Looper/ListRuns"
-	Looper_StreamState_FullMethodName      = "/looper.v1.Looper/StreamState"
-	Looper_RespondDecision_FullMethodName  = "/looper.v1.Looper/RespondDecision"
-	Looper_ListLoops_FullMethodName        = "/looper.v1.Looper/ListLoops"
-	Looper_SetLoopEnabled_FullMethodName   = "/looper.v1.Looper/SetLoopEnabled"
-	Looper_RunLoopOnce_FullMethodName      = "/looper.v1.Looper/RunLoopOnce"
-	Looper_StopLoopGraceful_FullMethodName = "/looper.v1.Looper/StopLoopGraceful"
-	Looper_RenameLoop_FullMethodName       = "/looper.v1.Looper/RenameLoop"
-	Looper_DeleteLoop_FullMethodName       = "/looper.v1.Looper/DeleteLoop"
-	Looper_Attach_FullMethodName           = "/looper.v1.Looper/Attach"
+	Looper_Ping_FullMethodName               = "/looper.v1.Looper/Ping"
+	Looper_Shutdown_FullMethodName           = "/looper.v1.Looper/Shutdown"
+	Looper_StartLoop_FullMethodName          = "/looper.v1.Looper/StartLoop"
+	Looper_StopLoop_FullMethodName           = "/looper.v1.Looper/StopLoop"
+	Looper_ListRuns_FullMethodName           = "/looper.v1.Looper/ListRuns"
+	Looper_StreamState_FullMethodName        = "/looper.v1.Looper/StreamState"
+	Looper_RespondDecision_FullMethodName    = "/looper.v1.Looper/RespondDecision"
+	Looper_ListLoops_FullMethodName          = "/looper.v1.Looper/ListLoops"
+	Looper_SetLoopEnabled_FullMethodName     = "/looper.v1.Looper/SetLoopEnabled"
+	Looper_RunLoopOnce_FullMethodName        = "/looper.v1.Looper/RunLoopOnce"
+	Looper_StopLoopGraceful_FullMethodName   = "/looper.v1.Looper/StopLoopGraceful"
+	Looper_RenameLoop_FullMethodName         = "/looper.v1.Looper/RenameLoop"
+	Looper_DeleteLoop_FullMethodName         = "/looper.v1.Looper/DeleteLoop"
+	Looper_SetScheduleEnabled_FullMethodName = "/looper.v1.Looper/SetScheduleEnabled"
+	Looper_Attach_FullMethodName             = "/looper.v1.Looper/Attach"
 )
 
 // LooperClient is the client API for Looper service.
@@ -70,6 +71,10 @@ type LooperClient interface {
 	RenameLoop(ctx context.Context, in *RenameLoopRequest, opts ...grpc.CallOption) (*RenameLoopResponse, error)
 	// DeleteLoop deletes a loop's file and registry entry.
 	DeleteLoop(ctx context.Context, in *DeleteLoopRequest, opts ...grpc.CallOption) (*DeleteLoopResponse, error)
+	// SetScheduleEnabled persists a loop's schedule-enabled flag,
+	// independent of its continuous enabled flag. It does not itself
+	// start/stop any run.
+	SetScheduleEnabled(ctx context.Context, in *SetScheduleEnabledRequest, opts ...grpc.CallOption) (*SetScheduleEnabledResponse, error)
 	// Attach opens a bidirectional stream to a run's live interactive session:
 	// the client sends stdin bytes and resize events; the server streams the
 	// session's terminal output.
@@ -223,6 +228,16 @@ func (c *looperClient) DeleteLoop(ctx context.Context, in *DeleteLoopRequest, op
 	return out, nil
 }
 
+func (c *looperClient) SetScheduleEnabled(ctx context.Context, in *SetScheduleEnabledRequest, opts ...grpc.CallOption) (*SetScheduleEnabledResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetScheduleEnabledResponse)
+	err := c.cc.Invoke(ctx, Looper_SetScheduleEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *looperClient) Attach(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AttachInput, AttachOutput], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &Looper_ServiceDesc.Streams[1], Looper_Attach_FullMethodName, cOpts...)
@@ -271,6 +286,10 @@ type LooperServer interface {
 	RenameLoop(context.Context, *RenameLoopRequest) (*RenameLoopResponse, error)
 	// DeleteLoop deletes a loop's file and registry entry.
 	DeleteLoop(context.Context, *DeleteLoopRequest) (*DeleteLoopResponse, error)
+	// SetScheduleEnabled persists a loop's schedule-enabled flag,
+	// independent of its continuous enabled flag. It does not itself
+	// start/stop any run.
+	SetScheduleEnabled(context.Context, *SetScheduleEnabledRequest) (*SetScheduleEnabledResponse, error)
 	// Attach opens a bidirectional stream to a run's live interactive session:
 	// the client sends stdin bytes and resize events; the server streams the
 	// session's terminal output.
@@ -323,6 +342,9 @@ func (UnimplementedLooperServer) RenameLoop(context.Context, *RenameLoopRequest)
 }
 func (UnimplementedLooperServer) DeleteLoop(context.Context, *DeleteLoopRequest) (*DeleteLoopResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteLoop not implemented")
+}
+func (UnimplementedLooperServer) SetScheduleEnabled(context.Context, *SetScheduleEnabledRequest) (*SetScheduleEnabledResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetScheduleEnabled not implemented")
 }
 func (UnimplementedLooperServer) Attach(grpc.BidiStreamingServer[AttachInput, AttachOutput]) error {
 	return status.Error(codes.Unimplemented, "method Attach not implemented")
@@ -575,6 +597,24 @@ func _Looper_DeleteLoop_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Looper_SetScheduleEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetScheduleEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(LooperServer).SetScheduleEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Looper_SetScheduleEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(LooperServer).SetScheduleEnabled(ctx, req.(*SetScheduleEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Looper_Attach_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(LooperServer).Attach(&grpc.GenericServerStream[AttachInput, AttachOutput]{ServerStream: stream})
 }
@@ -636,6 +676,10 @@ var Looper_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteLoop",
 			Handler:    _Looper_DeleteLoop_Handler,
+		},
+		{
+			MethodName: "SetScheduleEnabled",
+			Handler:    _Looper_SetScheduleEnabled_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

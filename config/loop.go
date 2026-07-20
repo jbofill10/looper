@@ -43,13 +43,14 @@ type Step struct {
 
 // Loop is an ordered list of steps run as a repeating workflow.
 type Loop struct {
-	Name           string `yaml:"name"`
-	Concurrency    int    `yaml:"concurrency,omitempty"`
-	MaxConcurrency int    `yaml:"max_concurrency,omitempty"`
-	MaxIterations  int    `yaml:"max_iterations,omitempty"`
-	Workspace      string `yaml:"workspace,omitempty"` // shared|worktree
-	TaskVar        string `yaml:"task_var,omitempty"`  // the output var identifying a work unit; defaults to TASK_ID
-	Steps          []Step `yaml:"steps"`
+	Name           string    `yaml:"name"`
+	Concurrency    int       `yaml:"concurrency,omitempty"`
+	MaxConcurrency int       `yaml:"max_concurrency,omitempty"`
+	MaxIterations  int       `yaml:"max_iterations,omitempty"`
+	Workspace      string    `yaml:"workspace,omitempty"` // shared|worktree
+	TaskVar        string    `yaml:"task_var,omitempty"`  // the output var identifying a work unit; defaults to TASK_ID
+	Schedule       *Schedule `yaml:"schedule,omitempty"`  // optional repeating trigger (see schedule.go)
+	Steps          []Step    `yaml:"steps"`
 }
 
 // LoadLoop reads, parses, and validates a loop definition file.
@@ -174,6 +175,11 @@ func (l *Loop) Validate() error {
 	}
 	if l.TaskVar == "" {
 		l.TaskVar = "TASK_ID"
+	}
+	if l.Schedule != nil {
+		if _, err := l.Schedule.CronSpecs(); err != nil {
+			return fmt.Errorf("invalid schedule: %w", err)
+		}
 	}
 	seen := map[string]bool{}
 	for i := range l.Steps {

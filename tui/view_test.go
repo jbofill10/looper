@@ -321,6 +321,39 @@ func TestView_ToggleEnabledKeyInvokesSetLoopEnabledFn(t *testing.T) {
 	}
 }
 
+func TestView_FleetShowsScheduleInfo(t *testing.T) {
+	m := NewModel(Options{})
+	next, _ := m.Update(LoopsSnapshotMsg{
+		{Name: "nightly", ScheduleEnabled: true, NextRun: "2026-07-17T21:00:00Z"},
+	})
+	m = next.(Model)
+
+	out := m.View()
+	if !strings.Contains(out, "2026-07-17T21:00:00Z") {
+		t.Errorf("View() = %q, want it to show the loop's NextRun", out)
+	}
+}
+
+func TestView_ToggleScheduleKeyInvokesSetScheduleEnabledFn(t *testing.T) {
+	var gotName string
+	var gotEnabled bool
+	m := NewModel(Options{
+		SetScheduleEnabledFn: func(name string, enabled bool) tea.Cmd {
+			gotName, gotEnabled = name, enabled
+			return nil
+		},
+	})
+	next, _ := m.Update(LoopsSnapshotMsg{{Name: "a", ScheduleEnabled: false}})
+	m = next.(Model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // loop-row keys require the Loops tree focused
+	m = next.(Model)
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if gotName != "a" || gotEnabled != true {
+		t.Errorf("SetScheduleEnabledFn called with (%q, %v), want (\"a\", true)", gotName, gotEnabled)
+	}
+}
+
 func TestView_RunOnceKeyInvokesRunLoopOnceFn(t *testing.T) {
 	var got string
 	m := NewModel(Options{RunLoopOnceFn: func(name string) tea.Cmd { got = name; return nil }})

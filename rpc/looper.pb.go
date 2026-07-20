@@ -1185,14 +1185,16 @@ func (x *ListLoopsRequest) GetBaseDir() string {
 }
 
 type LoopInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
-	Enabled       bool                   `protobuf:"varint,3,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	Steps         []string               `protobuf:"bytes,4,rep,name=steps,proto3" json:"steps,omitempty"`
-	RunId         string                 `protobuf:"bytes,5,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"` // active run id, empty if not running
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Path            string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Enabled         bool                   `protobuf:"varint,3,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Steps           []string               `protobuf:"bytes,4,rep,name=steps,proto3" json:"steps,omitempty"`
+	RunId           string                 `protobuf:"bytes,5,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"` // active run id, empty if not running
+	ScheduleEnabled bool                   `protobuf:"varint,6,opt,name=schedule_enabled,json=scheduleEnabled,proto3" json:"schedule_enabled,omitempty"`
+	NextRun         string                 `protobuf:"bytes,7,opt,name=next_run,json=nextRun,proto3" json:"next_run,omitempty"` // RFC3339, empty if unscheduled or schedule disabled
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *LoopInfo) Reset() {
@@ -1256,6 +1258,20 @@ func (x *LoopInfo) GetSteps() []string {
 func (x *LoopInfo) GetRunId() string {
 	if x != nil {
 		return x.RunId
+	}
+	return ""
+}
+
+func (x *LoopInfo) GetScheduleEnabled() bool {
+	if x != nil {
+		return x.ScheduleEnabled
+	}
+	return false
+}
+
+func (x *LoopInfo) GetNextRun() string {
+	if x != nil {
+		return x.NextRun
 	}
 	return ""
 }
@@ -1792,6 +1808,110 @@ func (*DeleteLoopResponse) Descriptor() ([]byte, []int) {
 	return file_proto_looper_proto_rawDescGZIP(), []int{32}
 }
 
+type SetScheduleEnabledRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LoopName      string                 `protobuf:"bytes,1,opt,name=loop_name,json=loopName,proto3" json:"loop_name,omitempty"`
+	BaseDir       string                 `protobuf:"bytes,2,opt,name=base_dir,json=baseDir,proto3" json:"base_dir,omitempty"`
+	Workdir       string                 `protobuf:"bytes,3,opt,name=workdir,proto3" json:"workdir,omitempty"`
+	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetScheduleEnabledRequest) Reset() {
+	*x = SetScheduleEnabledRequest{}
+	mi := &file_proto_looper_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetScheduleEnabledRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetScheduleEnabledRequest) ProtoMessage() {}
+
+func (x *SetScheduleEnabledRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_looper_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetScheduleEnabledRequest.ProtoReflect.Descriptor instead.
+func (*SetScheduleEnabledRequest) Descriptor() ([]byte, []int) {
+	return file_proto_looper_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *SetScheduleEnabledRequest) GetLoopName() string {
+	if x != nil {
+		return x.LoopName
+	}
+	return ""
+}
+
+func (x *SetScheduleEnabledRequest) GetBaseDir() string {
+	if x != nil {
+		return x.BaseDir
+	}
+	return ""
+}
+
+func (x *SetScheduleEnabledRequest) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *SetScheduleEnabledRequest) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+type SetScheduleEnabledResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetScheduleEnabledResponse) Reset() {
+	*x = SetScheduleEnabledResponse{}
+	mi := &file_proto_looper_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetScheduleEnabledResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetScheduleEnabledResponse) ProtoMessage() {}
+
+func (x *SetScheduleEnabledResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_looper_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetScheduleEnabledResponse.ProtoReflect.Descriptor instead.
+func (*SetScheduleEnabledResponse) Descriptor() ([]byte, []int) {
+	return file_proto_looper_proto_rawDescGZIP(), []int{34}
+}
+
 var File_proto_looper_proto protoreflect.FileDescriptor
 
 const file_proto_looper_proto_rawDesc = "" +
@@ -1868,13 +1988,15 @@ const file_proto_looper_proto_rawDesc = "" +
 	"\aoutcome\x18\x03 \x01(\tR\aoutcome\"\x19\n" +
 	"\x17RespondDecisionResponse\"-\n" +
 	"\x10ListLoopsRequest\x12\x19\n" +
-	"\bbase_dir\x18\x01 \x01(\tR\abaseDir\"y\n" +
+	"\bbase_dir\x18\x01 \x01(\tR\abaseDir\"\xbf\x01\n" +
 	"\bLoopInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x18\n" +
 	"\aenabled\x18\x03 \x01(\bR\aenabled\x12\x14\n" +
 	"\x05steps\x18\x04 \x03(\tR\x05steps\x12\x15\n" +
-	"\x06run_id\x18\x05 \x01(\tR\x05runId\">\n" +
+	"\x06run_id\x18\x05 \x01(\tR\x05runId\x12)\n" +
+	"\x10schedule_enabled\x18\x06 \x01(\bR\x0fscheduleEnabled\x12\x19\n" +
+	"\bnext_run\x18\a \x01(\tR\anextRun\">\n" +
 	"\x11ListLoopsResponse\x12)\n" +
 	"\x05loops\x18\x01 \x03(\v2\x13.looper.v1.LoopInfoR\x05loops\"\x83\x01\n" +
 	"\x15SetLoopEnabledRequest\x12\x1b\n" +
@@ -1902,7 +2024,13 @@ const file_proto_looper_proto_rawDesc = "" +
 	"\x11DeleteLoopRequest\x12\x1b\n" +
 	"\tloop_name\x18\x01 \x01(\tR\bloopName\x12\x19\n" +
 	"\bbase_dir\x18\x02 \x01(\tR\abaseDir\"\x14\n" +
-	"\x12DeleteLoopResponse2\x99\b\n" +
+	"\x12DeleteLoopResponse\"\x87\x01\n" +
+	"\x19SetScheduleEnabledRequest\x12\x1b\n" +
+	"\tloop_name\x18\x01 \x01(\tR\bloopName\x12\x19\n" +
+	"\bbase_dir\x18\x02 \x01(\tR\abaseDir\x12\x18\n" +
+	"\aworkdir\x18\x03 \x01(\tR\aworkdir\x12\x18\n" +
+	"\aenabled\x18\x04 \x01(\bR\aenabled\"\x1c\n" +
+	"\x1aSetScheduleEnabledResponse2\xfc\b\n" +
 	"\x06Looper\x127\n" +
 	"\x04Ping\x12\x16.looper.v1.PingRequest\x1a\x17.looper.v1.PingResponse\x12C\n" +
 	"\bShutdown\x12\x1a.looper.v1.ShutdownRequest\x1a\x1b.looper.v1.ShutdownResponse\x12F\n" +
@@ -1918,7 +2046,8 @@ const file_proto_looper_proto_rawDesc = "" +
 	"\n" +
 	"RenameLoop\x12\x1c.looper.v1.RenameLoopRequest\x1a\x1d.looper.v1.RenameLoopResponse\x12I\n" +
 	"\n" +
-	"DeleteLoop\x12\x1c.looper.v1.DeleteLoopRequest\x1a\x1d.looper.v1.DeleteLoopResponse\x12=\n" +
+	"DeleteLoop\x12\x1c.looper.v1.DeleteLoopRequest\x1a\x1d.looper.v1.DeleteLoopResponse\x12a\n" +
+	"\x12SetScheduleEnabled\x12$.looper.v1.SetScheduleEnabledRequest\x1a%.looper.v1.SetScheduleEnabledResponse\x12=\n" +
 	"\x06Attach\x12\x16.looper.v1.AttachInput\x1a\x17.looper.v1.AttachOutput(\x010\x01B%Z#github.com/jbofill10/looper/rpc;rpcb\x06proto3"
 
 var (
@@ -1933,41 +2062,43 @@ func file_proto_looper_proto_rawDescGZIP() []byte {
 	return file_proto_looper_proto_rawDescData
 }
 
-var file_proto_looper_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_proto_looper_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_proto_looper_proto_goTypes = []any{
-	(*AttachInput)(nil),              // 0: looper.v1.AttachInput
-	(*AttachStart)(nil),              // 1: looper.v1.AttachStart
-	(*Resize)(nil),                   // 2: looper.v1.Resize
-	(*AttachOutput)(nil),             // 3: looper.v1.AttachOutput
-	(*PingRequest)(nil),              // 4: looper.v1.PingRequest
-	(*PingResponse)(nil),             // 5: looper.v1.PingResponse
-	(*ShutdownRequest)(nil),          // 6: looper.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),         // 7: looper.v1.ShutdownResponse
-	(*StartLoopRequest)(nil),         // 8: looper.v1.StartLoopRequest
-	(*StartLoopResponse)(nil),        // 9: looper.v1.StartLoopResponse
-	(*StopLoopRequest)(nil),          // 10: looper.v1.StopLoopRequest
-	(*StopLoopResponse)(nil),         // 11: looper.v1.StopLoopResponse
-	(*ListRunsRequest)(nil),          // 12: looper.v1.ListRunsRequest
-	(*WorkerInfo)(nil),               // 13: looper.v1.WorkerInfo
-	(*RunInfo)(nil),                  // 14: looper.v1.RunInfo
-	(*ListRunsResponse)(nil),         // 15: looper.v1.ListRunsResponse
-	(*StreamStateRequest)(nil),       // 16: looper.v1.StreamStateRequest
-	(*StateUpdate)(nil),              // 17: looper.v1.StateUpdate
-	(*RespondDecisionRequest)(nil),   // 18: looper.v1.RespondDecisionRequest
-	(*RespondDecisionResponse)(nil),  // 19: looper.v1.RespondDecisionResponse
-	(*ListLoopsRequest)(nil),         // 20: looper.v1.ListLoopsRequest
-	(*LoopInfo)(nil),                 // 21: looper.v1.LoopInfo
-	(*ListLoopsResponse)(nil),        // 22: looper.v1.ListLoopsResponse
-	(*SetLoopEnabledRequest)(nil),    // 23: looper.v1.SetLoopEnabledRequest
-	(*SetLoopEnabledResponse)(nil),   // 24: looper.v1.SetLoopEnabledResponse
-	(*RunLoopOnceRequest)(nil),       // 25: looper.v1.RunLoopOnceRequest
-	(*RunLoopOnceResponse)(nil),      // 26: looper.v1.RunLoopOnceResponse
-	(*StopLoopGracefulRequest)(nil),  // 27: looper.v1.StopLoopGracefulRequest
-	(*StopLoopGracefulResponse)(nil), // 28: looper.v1.StopLoopGracefulResponse
-	(*RenameLoopRequest)(nil),        // 29: looper.v1.RenameLoopRequest
-	(*RenameLoopResponse)(nil),       // 30: looper.v1.RenameLoopResponse
-	(*DeleteLoopRequest)(nil),        // 31: looper.v1.DeleteLoopRequest
-	(*DeleteLoopResponse)(nil),       // 32: looper.v1.DeleteLoopResponse
+	(*AttachInput)(nil),                // 0: looper.v1.AttachInput
+	(*AttachStart)(nil),                // 1: looper.v1.AttachStart
+	(*Resize)(nil),                     // 2: looper.v1.Resize
+	(*AttachOutput)(nil),               // 3: looper.v1.AttachOutput
+	(*PingRequest)(nil),                // 4: looper.v1.PingRequest
+	(*PingResponse)(nil),               // 5: looper.v1.PingResponse
+	(*ShutdownRequest)(nil),            // 6: looper.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),           // 7: looper.v1.ShutdownResponse
+	(*StartLoopRequest)(nil),           // 8: looper.v1.StartLoopRequest
+	(*StartLoopResponse)(nil),          // 9: looper.v1.StartLoopResponse
+	(*StopLoopRequest)(nil),            // 10: looper.v1.StopLoopRequest
+	(*StopLoopResponse)(nil),           // 11: looper.v1.StopLoopResponse
+	(*ListRunsRequest)(nil),            // 12: looper.v1.ListRunsRequest
+	(*WorkerInfo)(nil),                 // 13: looper.v1.WorkerInfo
+	(*RunInfo)(nil),                    // 14: looper.v1.RunInfo
+	(*ListRunsResponse)(nil),           // 15: looper.v1.ListRunsResponse
+	(*StreamStateRequest)(nil),         // 16: looper.v1.StreamStateRequest
+	(*StateUpdate)(nil),                // 17: looper.v1.StateUpdate
+	(*RespondDecisionRequest)(nil),     // 18: looper.v1.RespondDecisionRequest
+	(*RespondDecisionResponse)(nil),    // 19: looper.v1.RespondDecisionResponse
+	(*ListLoopsRequest)(nil),           // 20: looper.v1.ListLoopsRequest
+	(*LoopInfo)(nil),                   // 21: looper.v1.LoopInfo
+	(*ListLoopsResponse)(nil),          // 22: looper.v1.ListLoopsResponse
+	(*SetLoopEnabledRequest)(nil),      // 23: looper.v1.SetLoopEnabledRequest
+	(*SetLoopEnabledResponse)(nil),     // 24: looper.v1.SetLoopEnabledResponse
+	(*RunLoopOnceRequest)(nil),         // 25: looper.v1.RunLoopOnceRequest
+	(*RunLoopOnceResponse)(nil),        // 26: looper.v1.RunLoopOnceResponse
+	(*StopLoopGracefulRequest)(nil),    // 27: looper.v1.StopLoopGracefulRequest
+	(*StopLoopGracefulResponse)(nil),   // 28: looper.v1.StopLoopGracefulResponse
+	(*RenameLoopRequest)(nil),          // 29: looper.v1.RenameLoopRequest
+	(*RenameLoopResponse)(nil),         // 30: looper.v1.RenameLoopResponse
+	(*DeleteLoopRequest)(nil),          // 31: looper.v1.DeleteLoopRequest
+	(*DeleteLoopResponse)(nil),         // 32: looper.v1.DeleteLoopResponse
+	(*SetScheduleEnabledRequest)(nil),  // 33: looper.v1.SetScheduleEnabledRequest
+	(*SetScheduleEnabledResponse)(nil), // 34: looper.v1.SetScheduleEnabledResponse
 }
 var file_proto_looper_proto_depIdxs = []int32{
 	1,  // 0: looper.v1.AttachInput.start:type_name -> looper.v1.AttachStart
@@ -1988,23 +2119,25 @@ var file_proto_looper_proto_depIdxs = []int32{
 	27, // 15: looper.v1.Looper.StopLoopGraceful:input_type -> looper.v1.StopLoopGracefulRequest
 	29, // 16: looper.v1.Looper.RenameLoop:input_type -> looper.v1.RenameLoopRequest
 	31, // 17: looper.v1.Looper.DeleteLoop:input_type -> looper.v1.DeleteLoopRequest
-	0,  // 18: looper.v1.Looper.Attach:input_type -> looper.v1.AttachInput
-	5,  // 19: looper.v1.Looper.Ping:output_type -> looper.v1.PingResponse
-	7,  // 20: looper.v1.Looper.Shutdown:output_type -> looper.v1.ShutdownResponse
-	9,  // 21: looper.v1.Looper.StartLoop:output_type -> looper.v1.StartLoopResponse
-	11, // 22: looper.v1.Looper.StopLoop:output_type -> looper.v1.StopLoopResponse
-	15, // 23: looper.v1.Looper.ListRuns:output_type -> looper.v1.ListRunsResponse
-	17, // 24: looper.v1.Looper.StreamState:output_type -> looper.v1.StateUpdate
-	19, // 25: looper.v1.Looper.RespondDecision:output_type -> looper.v1.RespondDecisionResponse
-	22, // 26: looper.v1.Looper.ListLoops:output_type -> looper.v1.ListLoopsResponse
-	24, // 27: looper.v1.Looper.SetLoopEnabled:output_type -> looper.v1.SetLoopEnabledResponse
-	26, // 28: looper.v1.Looper.RunLoopOnce:output_type -> looper.v1.RunLoopOnceResponse
-	28, // 29: looper.v1.Looper.StopLoopGraceful:output_type -> looper.v1.StopLoopGracefulResponse
-	30, // 30: looper.v1.Looper.RenameLoop:output_type -> looper.v1.RenameLoopResponse
-	32, // 31: looper.v1.Looper.DeleteLoop:output_type -> looper.v1.DeleteLoopResponse
-	3,  // 32: looper.v1.Looper.Attach:output_type -> looper.v1.AttachOutput
-	19, // [19:33] is the sub-list for method output_type
-	5,  // [5:19] is the sub-list for method input_type
+	33, // 18: looper.v1.Looper.SetScheduleEnabled:input_type -> looper.v1.SetScheduleEnabledRequest
+	0,  // 19: looper.v1.Looper.Attach:input_type -> looper.v1.AttachInput
+	5,  // 20: looper.v1.Looper.Ping:output_type -> looper.v1.PingResponse
+	7,  // 21: looper.v1.Looper.Shutdown:output_type -> looper.v1.ShutdownResponse
+	9,  // 22: looper.v1.Looper.StartLoop:output_type -> looper.v1.StartLoopResponse
+	11, // 23: looper.v1.Looper.StopLoop:output_type -> looper.v1.StopLoopResponse
+	15, // 24: looper.v1.Looper.ListRuns:output_type -> looper.v1.ListRunsResponse
+	17, // 25: looper.v1.Looper.StreamState:output_type -> looper.v1.StateUpdate
+	19, // 26: looper.v1.Looper.RespondDecision:output_type -> looper.v1.RespondDecisionResponse
+	22, // 27: looper.v1.Looper.ListLoops:output_type -> looper.v1.ListLoopsResponse
+	24, // 28: looper.v1.Looper.SetLoopEnabled:output_type -> looper.v1.SetLoopEnabledResponse
+	26, // 29: looper.v1.Looper.RunLoopOnce:output_type -> looper.v1.RunLoopOnceResponse
+	28, // 30: looper.v1.Looper.StopLoopGraceful:output_type -> looper.v1.StopLoopGracefulResponse
+	30, // 31: looper.v1.Looper.RenameLoop:output_type -> looper.v1.RenameLoopResponse
+	32, // 32: looper.v1.Looper.DeleteLoop:output_type -> looper.v1.DeleteLoopResponse
+	34, // 33: looper.v1.Looper.SetScheduleEnabled:output_type -> looper.v1.SetScheduleEnabledResponse
+	3,  // 34: looper.v1.Looper.Attach:output_type -> looper.v1.AttachOutput
+	20, // [20:35] is the sub-list for method output_type
+	5,  // [5:20] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -2026,7 +2159,7 @@ func file_proto_looper_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_looper_proto_rawDesc), len(file_proto_looper_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   33,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

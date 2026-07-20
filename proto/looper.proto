@@ -37,6 +37,10 @@ service Looper {
   rpc RenameLoop(RenameLoopRequest) returns (RenameLoopResponse);
   // DeleteLoop deletes a loop's file and registry entry.
   rpc DeleteLoop(DeleteLoopRequest) returns (DeleteLoopResponse);
+  // SetScheduleEnabled persists a loop's schedule-enabled flag,
+  // independent of its continuous enabled flag. It does not itself
+  // start/stop any run.
+  rpc SetScheduleEnabled(SetScheduleEnabledRequest) returns (SetScheduleEnabledResponse);
 
   // Attach opens a bidirectional stream to a run's live interactive session:
   // the client sends stdin bytes and resize events; the server streams the
@@ -128,6 +132,8 @@ message LoopInfo {
   bool enabled = 3;
   repeated string steps = 4;
   string run_id = 5; // active run id, empty if not running
+  bool schedule_enabled = 6;
+  string next_run = 7; // RFC3339, empty if unscheduled or schedule disabled
 }
 message ListLoopsResponse { repeated LoopInfo loops = 1; }
 
@@ -162,3 +168,11 @@ message DeleteLoopRequest {
   string base_dir = 2;
 }
 message DeleteLoopResponse {}
+
+message SetScheduleEnabledRequest {
+  string loop_name = 1;
+  string base_dir = 2;
+  string workdir = 3;
+  bool enabled = 4;
+}
+message SetScheduleEnabledResponse {}
