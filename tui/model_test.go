@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jbofill10/looper/history"
 )
 
 // send applies msg to m and returns the updated Model (discarding the cmd,
@@ -195,5 +197,133 @@ func TestModel_ErrMsgSurfacesInBuilderMsg(t *testing.T) {
 	}
 	if !strings.Contains(m.builderMsg, "active run") {
 		t.Errorf("builderMsg = %q, want it to contain the underlying error text", m.builderMsg)
+	}
+}
+
+func TestHandleLoopRowKey_HTriggersLoadHistoryAndOpensViewRuns(t *testing.T) {
+	var gotLoopName string
+	m := NewModel(Options{
+		LoadHistoryFn: func(loopName string) tea.Cmd {
+			gotLoopName = loopName
+			return func() tea.Msg { return nil }
+		},
+	})
+	mm, _ := m.Update(LoopsSnapshotMsg{{Name: "loop1", Enabled: true}})
+	m = mm.(Model)
+	m.loopsFocused = true
+
+	m, cmd := press(t, m, "h")
+	if cmd == nil {
+		t.Fatalf("expected a command from LoadHistoryFn")
+	}
+	if gotLoopName != "loop1" {
+		t.Errorf("LoadHistoryFn called with %q, want loop1", gotLoopName)
+	}
+	if m.view != viewRuns {
+		t.Errorf("view = %v, want viewRuns", m.view)
+	}
+	if m.historyLoop != "loop1" {
+		t.Errorf("historyLoop = %q, want loop1", m.historyLoop)
+	}
+}
+
+func TestHistorySnapshotMsg_PopulatesHistoryForMatchingLoop(t *testing.T) {
+	m := NewModel(Options{})
+	m.historyLoop = "loop1"
+
+	entries := []history.Entry{{IterationID: "iter-1", Status: "done"}}
+	mm, _ := m.Update(HistorySnapshotMsg{LoopName: "loop1", Entries: entries})
+	m = mm.(Model)
+	if len(m.history) != 1 || m.history[0].IterationID != "iter-1" {
+		t.Errorf("history = %+v, want one entry iter-1", m.history)
+	}
+}
+
+func TestHistorySnapshotMsg_IgnoredForStaleLoop(t *testing.T) {
+	m := NewModel(Options{})
+	m.historyLoop = "loop1"
+
+	mm, _ := m.Update(HistorySnapshotMsg{LoopName: "loop2", Entries: []history.Entry{{IterationID: "iter-1"}}})
+	m = mm.(Model)
+	if len(m.history) != 0 {
+		t.Errorf("history = %+v, want empty (stale loop name)", m.history)
+	}
+}
+
+func TestViewRuns_EnterOpensViewDigest(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewRuns
+	m.historyLoop = "loop1"
+	m.history = []history.Entry{{IterationID: "iter-1", Steps: []history.StepDigest{{Name: "a", HasDigest: true}}}}
+
+	m, _ = press(t, m, "enter")
+	if m.view != viewDigest {
+		t.Errorf("view = %v, want viewDigest", m.view)
+	}
+	if m.selectedRun.IterationID != "iter-1" {
+		t.Errorf("selectedRun = %+v, want iter-1", m.selectedRun)
+	}
+}
+
+func TestViewDigest_EnterOnStepWithDigestCallsLoadDigestFn(t *testing.T) {
+	var gotStep string
+	m := NewModel(Options{
+		LoadDigestFn: func(loopName string, entry history.Entry, step string) tea.Cmd {
+			gotStep = step
+			return func() tea.Msg { return nil }
+		},
+	})
+	m.view = viewDigest
+	m.historyLoop = "loop1"
+	m.selectedRun = history.Entry{IterationID: "iter-1", Steps: []history.StepDigest{{Name: "a", HasDigest: true}}}
+
+	_, cmd := press(t, m, "enter")
+	if cmd == nil {
+		t.Fatalf("expected a command from LoadDigestFn")
+	}
+	if gotStep != "a" {
+		t.Errorf("LoadDigestFn called with step %q, want a", gotStep)
+	}
+}
+
+func TestViewDigest_EnterOnStepWithoutDigestIsNoop(t *testing.T) {
+	called := false
+	m := NewModel(Options{
+		LoadDigestFn: func(loopName string, entry history.Entry, step string) tea.Cmd {
+			called = true
+			return nil
+		},
+	})
+	m.view = viewDigest
+	m.selectedRun = history.Entry{Steps: []history.StepDigest{{Name: "a", HasDigest: false}}}
+
+	press(t, m, "enter")
+	if called {
+		t.Errorf("LoadDigestFn should not be called for a step with no digest")
+	}
+}
+
+func TestDigestContentMsg_PopulatesContent(t *testing.T) {
+	m := NewModel(Options{})
+	mm, _ := m.Update(DigestContentMsg{Step: "a", Content: "# hi"})
+	m = mm.(Model)
+	if m.digestStep != "a" || m.digestContent != "# hi" {
+		t.Errorf("digestStep/digestContent = %q/%q, want a/# hi", m.digestStep, m.digestContent)
+	}
+}
+
+func TestEsc_UnwindsViewDigestToViewRunsToViewFleet(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewDigest
+	m, _ = press(t, m, "esc")
+	if m.view != viewRuns {
+		t.Errorf("view = %v, want viewRuns", m.view)
+	}
+	m, _ = press(t, m, "esc")
+	if m.view != viewFleet {
+		t.Errorf("view = %v, want viewFleet", m.view)
+	}
+	if m.historyLoop != "" {
+		t.Errorf("historyLoop = %q, want empty after leaving viewRuns", m.historyLoop)
 	}
 }
