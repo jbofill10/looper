@@ -209,37 +209,92 @@ func TestView_QuitKeys(t *testing.T) {
 	}
 }
 
-func TestView_NewLoopKeyEntersBuilder(t *testing.T) {
-	dir := t.TempDir()
-	m := NewModel(Options{
-		ProjectDir:    dir,
-		NewLoopPathFn: func() string { return filepath.Join(dir, ".looper", "loops", "new-1.yaml") },
-	})
+func TestView_NKeyEntersNamingStage(t *testing.T) {
+	m := twoWorkerModel()
 	m, _ = press(t, m, "n")
-	if m.view != viewBuilder {
-		t.Fatalf("view = %v, want viewBuilder", m.view)
+	if m.view != viewNaming {
+		t.Fatalf("view = %v, want viewNaming", m.view)
 	}
 	out := m.View()
-	if !strings.Contains(out, "Loop:") {
-		t.Fatalf("builder view missing loop title:\n%s", out)
+	if !strings.Contains(out, "New loop") {
+		t.Fatalf("naming view missing title:\n%s", out)
 	}
-	if !strings.Contains(out, "[esc] cancel") {
-		t.Fatalf("builder view missing cancel hint:\n%s", out)
+	if !strings.Contains(out, "[enter] create") {
+		t.Fatalf("naming view missing create hint:\n%s", out)
 	}
+}
+
+func TestView_NamingEscCancelsBackToFleet(t *testing.T) {
+	m := twoWorkerModel()
+	m, _ = press(t, m, "n")
+	m = typeRunes(t, m, "abandoned")
+	m, _ = press(t, m, "esc")
+
+	if m.view != viewFleet {
+		t.Fatalf("view = %v, want viewFleet after esc", m.view)
+	}
+}
+
+func TestView_NamingEmptyNameShowsError(t *testing.T) {
+	dir := t.TempDir()
+	m := NewModel(Options{ProjectDir: dir})
+	m, _ = press(t, m, "n")
+	m, _ = press(t, m, "enter")
+
+	if m.view != viewNaming {
+		t.Fatalf("view = %v, want to stay in viewNaming on empty name", m.view)
+	}
+	if !strings.Contains(m.View(), "loop name is required") {
+		t.Fatalf("naming view missing empty-name error:\n%s", m.View())
+	}
+}
+
+func TestView_NamingDuplicateNameShowsError(t *testing.T) {
+	dir := t.TempDir()
+	loopPath := filepath.Join(dir, ".looper", "loops", "dev-loop.yaml")
+	if err := os.MkdirAll(filepath.Dir(loopPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loopPath, []byte("name: dev-loop\nsteps:\n  - name: a\n    type: manual\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewModel(Options{ProjectDir: dir})
+	m, _ = press(t, m, "n")
+	m = typeRunes(t, m, "dev-loop")
+	m, _ = press(t, m, "enter")
+
+	if m.view != viewNaming {
+		t.Fatalf("view = %v, want to stay in viewNaming on duplicate name", m.view)
+	}
+	if !strings.Contains(m.View(), `"dev-loop"`) {
+		t.Fatalf("naming view missing duplicate-name error:\n%s", m.View())
+	}
+}
+
+// typeRunes feeds each character of s to m as individual key presses,
+// simulating a user typing s into the naming stage's buffer.
+func typeRunes(t *testing.T, m Model, s string) Model {
+	t.Helper()
+	for _, r := range s {
+		m, _ = press(t, m, string(r))
+	}
+	return m
 }
 
 func TestView_EscCancelsBuilderWithoutSaving(t *testing.T) {
 	called := false
 	dir := t.TempDir()
 	m := NewModel(Options{
-		ProjectDir:    dir,
-		NewLoopPathFn: func() string { return filepath.Join(dir, ".looper", "loops", "new-1.yaml") },
+		ProjectDir: dir,
 		AuthorFn: func(req builder.AuthorRequest) tea.Cmd {
 			called = true
 			return func() tea.Msg { return builder.SessionDoneMsg{} }
 		},
 	})
 	m, _ = press(t, m, "n")
+	m = typeRunes(t, m, "dev-loop")
+	m, _ = press(t, m, "enter")
 	m, _ = press(t, m, "esc")
 
 	if m.view != viewFleet {
@@ -252,11 +307,10 @@ func TestView_EscCancelsBuilderWithoutSaving(t *testing.T) {
 
 func TestView_CtrlCQuitsFromBuilder(t *testing.T) {
 	dir := t.TempDir()
-	m := NewModel(Options{
-		ProjectDir:    dir,
-		NewLoopPathFn: func() string { return filepath.Join(dir, ".looper", "loops", "new-1.yaml") },
-	})
+	m := NewModel(Options{ProjectDir: dir})
 	m, _ = press(t, m, "n")
+	m = typeRunes(t, m, "dev-loop")
+	m, _ = press(t, m, "enter")
 	_, cmd := press(t, m, "ctrl+c")
 	if cmd == nil {
 		t.Fatalf("ctrl+c from builder view did not return a command")
@@ -266,13 +320,12 @@ func TestView_CtrlCQuitsFromBuilder(t *testing.T) {
 func TestView_CompletingBuilderSavesAndReturnsToFleet(t *testing.T) {
 	dir := t.TempDir()
 	loopPath := filepath.Join(dir, ".looper", "loops", "dev-loop.yaml")
-	m := NewModel(Options{
-		ProjectDir:    dir,
-		NewLoopPathFn: func() string { return loopPath },
-	})
+	m := NewModel(Options{ProjectDir: dir})
 
-	m, _ = press(t, m, "n") // enter builder; writes a skeleton loop to loopPath
-	m, _ = press(t, m, "q") // quit -> builder.Model.Quit() becomes true
+	m, _ = press(t, m, "n")
+	m = typeRunes(t, m, "dev-loop")
+	m, _ = press(t, m, "enter") // enters builder; writes a skeleton loop to loopPath
+	m, _ = press(t, m, "q")     // quit -> builder.Model.Quit() becomes true
 
 	if m.view != viewFleet {
 		t.Fatalf("view = %v, want viewFleet after quitting the builder", m.view)
