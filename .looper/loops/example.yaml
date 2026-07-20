@@ -1,8 +1,0 @@
-name: example
-max_iterations: 1
-steps:
-  - name: hello
-    type: script
-    run: "echo hello from looper"
-  - name: confirm
-    type: manual
