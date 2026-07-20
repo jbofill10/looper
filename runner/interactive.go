@@ -103,10 +103,13 @@ func (e *InteractiveExecutor) Run(rc *runctx.RunContext, step config.Step) (Outc
 		return 0, fmt.Errorf("run interactive step %q: %w", step.Name, runErr)
 	}
 
-	if len(step.Outputs) > 0 {
+	if len(step.Outputs) > 0 || step.Digest != "" {
 		if err := captureOutputs(rc, step, outPath); err != nil {
 			return 0, err
 		}
+	}
+	if err := captureDigest(rc, step); err != nil {
+		return 0, err
 	}
 
 	if finalState == events.StateNoWork {

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jbofill10/looper/builder"
+	"github.com/jbofill10/looper/history"
 )
 
 // key builds a synthetic tea.KeyMsg for the given single-character or named
@@ -423,5 +424,61 @@ func TestView_ExpandedLoopForwardsCreateStepKeyToEmbeddedBuilder(t *testing.T) {
 
 	if authorReq.LoopPath != loopPath {
 		t.Errorf("AuthorFn called with LoopPath %q, want %q (create-step key must forward to the expanded loop's embedded builder)", authorReq.LoopPath, loopPath)
+	}
+}
+
+func TestViewRuns_ListsEntriesWithCursorAndStatus(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewRuns
+	m.historyLoop = "loop1"
+	m.history = []history.Entry{
+		{IterationID: "iter-2", WorkerID: "w1", Status: "done"},
+		{IterationID: "iter-1", WorkerID: "w1", Status: "running"},
+	}
+	out := m.View()
+	if !strings.Contains(out, "loop1") {
+		t.Fatalf("viewRuns missing loop name:\n%s", out)
+	}
+	if !strings.Contains(out, "iter-2") || !strings.Contains(out, "iter-1") {
+		t.Fatalf("viewRuns missing iteration rows:\n%s", out)
+	}
+	if !strings.Contains(out, "▸") {
+		t.Fatalf("viewRuns missing cursor glyph:\n%s", out)
+	}
+}
+
+func TestViewDigest_ListsStepsAndRendersLoadedContent(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewDigest
+	m.historyLoop = "loop1"
+	m.selectedRun = history.Entry{
+		IterationID: "iter-1",
+		Steps: []history.StepDigest{
+			{Name: "get-tasks", HasDigest: false},
+			{Name: "plan", HasDigest: true},
+		},
+	}
+	m.digestCursor = 1
+	m.digestStep = "plan"
+	m.digestContent = "# Plan\n\nDid the thing."
+
+	out := m.View()
+	if !strings.Contains(out, "get-tasks") || !strings.Contains(out, "plan") {
+		t.Fatalf("viewDigest missing step names:\n%s", out)
+	}
+	if !strings.Contains(out, "Did the thing.") {
+		t.Fatalf("viewDigest missing rendered digest content:\n%s", out)
+	}
+}
+
+func TestViewDigest_NoDigestForSelectedStepShowsPlaceholder(t *testing.T) {
+	m := NewModel(Options{})
+	m.view = viewDigest
+	m.selectedRun = history.Entry{
+		Steps: []history.StepDigest{{Name: "get-tasks", HasDigest: false}},
+	}
+	out := m.View()
+	if !strings.Contains(out, "no digest") {
+		t.Fatalf("viewDigest missing no-digest placeholder:\n%s", out)
 	}
 }

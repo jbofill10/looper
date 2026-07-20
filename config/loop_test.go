@@ -124,6 +124,8 @@ func TestStepValidate_Valid(t *testing.T) {
 		{Name: "a", Type: StepScript, Run: "true"},
 		{Name: "a", Type: StepHeadless, Prompt: "go"},
 		{Name: "a", Type: StepInteractive, Prompt: "go"},
+		{Name: "a", Type: StepScript, Run: "true", Outputs: []string{"X"}, Digest: "Y"},
+		{Name: "a", Type: StepHeadless, Prompt: "go", Digest: "DIGEST_FILE"},
 	}
 	for _, s := range cases {
 		if err := s.Validate(); err != nil {
@@ -150,6 +152,8 @@ func TestStepValidate_InvalidCases(t *testing.T) {
 		"headless missing prompt":    {Name: "a", Type: StepHeadless},
 		"interactive missing prompt": {Name: "a", Type: StepInteractive},
 		"bad on_fail":                {Name: "a", Type: StepScript, Run: "true", OnFail: "explode"},
+		"digest duplicates outputs":  {Name: "a", Type: StepScript, Run: "true", Outputs: []string{"D"}, Digest: "D"},
+		"digest on manual step":      {Name: "a", Type: StepManual, Digest: "D"},
 	}
 	for label, s := range cases {
 		t.Run(label, func(t *testing.T) {

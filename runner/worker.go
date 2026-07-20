@@ -241,6 +241,15 @@ func (w *Worker) runIteration(iter int, id string, resumeDir string) (stop bool,
 			return false, err
 		}
 		rc.Set("WORKDIR", w.Workdir)
+		// Persist context.json immediately so the iteration is visible to
+		// disk-based scanning (e.g. history.Scan) as soon as its directory
+		// exists, rather than only after its first step's outcome is
+		// recorded. Steps may take a long time (headless/interactive), so
+		// without this the run would be invisible in the TUI's run-history
+		// view until the first step finished.
+		if err := rc.Save(); err != nil {
+			return false, err
+		}
 	}
 
 	var digest strings.Builder

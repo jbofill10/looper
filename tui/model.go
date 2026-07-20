@@ -12,8 +12,10 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 
 	"github.com/jbofill10/looper/builder"
+	"github.com/jbofill10/looper/history"
 	"github.com/jbofill10/looper/style"
 )
 
@@ -84,6 +86,20 @@ type LoopSnapshot struct {
 // stays in sync with daemon-side enable/run-once/rename/delete actions
 // taken from other clients.
 type LoopsSnapshotMsg []LoopSnapshot
+
+// HistorySnapshotMsg carries a loop's run history, as scanned from disk, in
+// response to Options.LoadHistoryFn.
+type HistorySnapshotMsg struct {
+	LoopName string
+	Entries  []history.Entry
+}
+
+// DigestContentMsg carries one step's captured digest markdown for the
+// currently viewed iteration, in response to Options.LoadDigestFn.
+type DigestContentMsg struct {
+	Step    string
+	Content string
+}
 
 // ErrMsg reports an error encountered by the program wiring (e.g. a stream
 // or RPC failure) so the Model can surface it.
@@ -162,6 +178,12 @@ type Options struct {
 	RenameLoopFn func(loopName, newName string) tea.Cmd
 	// DeleteLoopFn deletes a loop.
 	DeleteLoopFn func(loopName string) tea.Cmd
+	// LoadHistoryFn fetches a loop's run history (scanned from its run
+	// directory on disk), for the 'h' keybinding on a Loops-catalog row.
+	LoadHistoryFn func(loopName string) tea.Cmd
+	// LoadDigestFn fetches one step's captured digest content for a
+	// specific run-history entry.
+	LoadDigestFn func(loopName string, entry history.Entry, step string) tea.Cmd
 	// Quit, if set, makes Init immediately emit tea.Quit — used by tests
 	// and tools that want a Model that never blocks on a real program run.
 	Quit bool
@@ -174,6 +196,8 @@ const (
 	viewFleet viewKind = iota
 	viewFocus
 	viewBuilder
+	viewRuns
+	viewDigest
 )
 
 // Model is the Bubble Tea model for looper's fleet & focus TUI. It holds
@@ -203,6 +227,15 @@ type Model struct {
 	deletingLoop string // "" = no delete confirmation pending; else the loop name
 
 	loopBuilders map[string]builder.Model // lazily populated, one per loop ever expanded
+
+	history       []history.Entry
+	historyLoop   string // "" = not currently browsing any loop's history
+	historyCursor int
+
+	selectedRun   history.Entry
+	digestCursor  int
+	digestStep    string // name of the step DigestContentMsg last delivered content for
+	digestContent string
 }
 
 // treeRow is one row of the Loops section's tree: either a loop header row
@@ -269,6 +302,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.treeCursor = 0
 		}
 		return m, nil
+	case HistorySnapshotMsg:
+		if msg.LoopName == m.historyLoop {
+			m.history = msg.Entries
+			if m.historyCursor >= len(m.history) {
+				m.historyCursor = len(m.history) - 1
+			}
+			if m.historyCursor < 0 {
+				m.historyCursor = 0
+			}
+		}
+		return m, nil
+	case DigestContentMsg:
+		m.digestStep = msg.Step
+		m.digestContent = msg.Content
+		return m, nil
 	case ErrMsg:
 		m.builderMsg = fmt.Sprintf("error: %v", msg.Err)
 		return m, nil
@@ -321,26 +369,42 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
-		if m.view != viewFleet {
-			break
-		}
-		if m.loopsFocused {
-			if m.treeCursor > 0 {
-				m.treeCursor--
+		switch m.view {
+		case viewFleet:
+			if m.loopsFocused {
+				if m.treeCursor > 0 {
+					m.treeCursor--
+				}
+			} else if m.cursor > 0 {
+				m.cursor--
 			}
-		} else if m.cursor > 0 {
-			m.cursor--
+		case viewRuns:
+			if m.historyCursor > 0 {
+				m.historyCursor--
+			}
+		case viewDigest:
+			if m.digestCursor > 0 {
+				m.digestCursor--
+			}
 		}
 	case "down", "j":
-		if m.view != viewFleet {
-			break
-		}
-		if m.loopsFocused {
-			if last := len(m.treeRows()) - 1; m.treeCursor < last {
-				m.treeCursor++
+		switch m.view {
+		case viewFleet:
+			if m.loopsFocused {
+				if last := len(m.treeRows()) - 1; m.treeCursor < last {
+					m.treeCursor++
+				}
+			} else if last := len(m.Workers()) - 1; m.cursor < last {
+				m.cursor++
 			}
-		} else if last := len(m.Workers()) - 1; m.cursor < last {
-			m.cursor++
+		case viewRuns:
+			if last := len(m.history) - 1; m.historyCursor < last {
+				m.historyCursor++
+			}
+		case viewDigest:
+			if last := len(m.selectedRun.Steps) - 1; m.digestCursor < last {
+				m.digestCursor++
+			}
 		}
 	case "tab":
 		if m.view == viewFleet {
@@ -359,17 +423,44 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "enter":
-		if m.view != viewFleet || m.loopsFocused {
-			break
-		}
-		rows := m.Workers()
-		if m.cursor < len(rows) {
-			row := rows[m.cursor]
-			m.focusRun, m.focusWorker = row.RunID, row.WorkerID
-			m.view = viewFocus
+		switch m.view {
+		case viewFleet:
+			if m.loopsFocused {
+				break
+			}
+			rows := m.Workers()
+			if m.cursor < len(rows) {
+				row := rows[m.cursor]
+				m.focusRun, m.focusWorker = row.RunID, row.WorkerID
+				m.view = viewFocus
+			}
+		case viewRuns:
+			if m.historyCursor < len(m.history) {
+				m.selectedRun = m.history[m.historyCursor]
+				m.digestCursor = 0
+				m.digestStep = ""
+				m.digestContent = ""
+				m.view = viewDigest
+			}
+		case viewDigest:
+			if m.digestCursor < len(m.selectedRun.Steps) {
+				step := m.selectedRun.Steps[m.digestCursor]
+				if step.HasDigest && m.opts.LoadDigestFn != nil {
+					return m, m.opts.LoadDigestFn(m.historyLoop, m.selectedRun, step.Name)
+				}
+			}
 		}
 	case "esc":
-		m.view = viewFleet
+		switch m.view {
+		case viewDigest:
+			m.view = viewRuns
+		case viewRuns:
+			m.view = viewFleet
+			m.historyLoop = ""
+			m.history = nil
+		default:
+			m.view = viewFleet
+		}
 	case "n":
 		if m.view == viewFleet && m.opts.NewLoopPathFn != nil {
 			loopPath := m.opts.NewLoopPathFn()
@@ -399,7 +490,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.view == viewFleet && m.loopsFocused {
 			return m.handleLoopRowKey(msg.String())
 		}
-	case "t", "s", "o", "g", "R", "D":
+	case "t", "s", "o", "g", "h", "R", "D":
 		if m.view == viewFleet && m.loopsFocused {
 			return m.handleLoopRowKey(msg.String())
 		}
@@ -447,9 +538,10 @@ func (m Model) handleFocusKey(k string) (tea.Model, tea.Cmd) {
 
 // handleLoopRowKey implements the Loops-section loop-row action keys: t
 // toggles enabled, s toggles the schedule, o runs once, g gracefully stops
-// an active run, x hard-aborts one, R begins a rename, D begins a delete
-// confirmation. All are no-ops when the cursor isn't on a loop row, and
-// g/x are additionally no-ops when that loop has no active run.
+// an active run, x hard-aborts one, h opens that loop's run history
+// (viewRuns), R begins a rename, D begins a delete confirmation. All are
+// no-ops when the cursor isn't on a loop row, and g/x are additionally
+// no-ops when that loop has no active run.
 func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
 	rows := m.treeRows()
 	if m.treeCursor >= len(rows) || rows[m.treeCursor].Kind != "loop" {
@@ -480,6 +572,14 @@ func (m Model) handleLoopRowKey(k string) (tea.Model, tea.Cmd) {
 	case "x":
 		if loop.RunID != "" && m.opts.AbortLoopFn != nil {
 			return m, m.opts.AbortLoopFn(loop.RunID)
+		}
+	case "h":
+		if m.opts.LoadHistoryFn != nil {
+			m.historyLoop = loop.Name
+			m.history = nil
+			m.historyCursor = 0
+			m.view = viewRuns
+			return m, m.opts.LoadHistoryFn(loop.Name)
 		}
 	case "R":
 		m.renamingLoop = loop.Name
@@ -624,6 +724,10 @@ func (m Model) View() string {
 		return m.viewFocus()
 	case viewBuilder:
 		return m.viewBuilder()
+	case viewRuns:
+		return m.viewRuns()
+	case viewDigest:
+		return m.viewDigest()
 	default:
 		return m.viewFleet()
 	}
@@ -739,6 +843,92 @@ func (m Model) viewFocus() string {
 		b.WriteString("\n" + style.Action.Render("[a] attach") + "\n")
 	}
 	b.WriteString("\n" + style.KeyHint.Render("[esc] back  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewRuns renders the run-history list for m.historyLoop: one row per
+// iteration found on disk, newest first, with a ▸ cursor on the selected
+// row and a status glyph (running/done/aborted/no-work).
+func (m Model) viewRuns() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · run history", m.historyLoop)))
+	if len(m.history) == 0 {
+		b.WriteString("(no runs yet, or still loading)\n")
+	}
+	for i, e := range m.history {
+		cursor := "  "
+		if i == m.historyCursor {
+			cursor = style.Marker.Render("▸ ")
+		}
+		worker := e.WorkerID
+		if worker == "" {
+			worker = "-"
+		}
+		fmt.Fprintf(&b, "%s%-24s %-8s %s\n", cursor, e.IterationID, worker, historyStatusGlyph(e.Status))
+	}
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] view digests  [esc] back") + "\n")
+	return b.String()
+}
+
+// historyStatusGlyph renders a run-history entry's status as a glyph +
+// label, reusing the style package's existing glyph colors.
+func historyStatusGlyph(status string) string {
+	switch status {
+	case "running":
+		return style.GlyphRunning.Render("⚙ running")
+	case "done":
+		return style.GlyphDone.Render("✔ done")
+	case "aborted":
+		return style.GlyphNeedsYou.Render("✗ aborted")
+	case "no-work":
+		return style.GlyphEmpty.Render("∅ no-work")
+	default:
+		return status
+	}
+}
+
+// viewDigest renders m.selectedRun's steps (in loop config order, with a
+// marker for which captured a digest) and, once loaded via Options.
+// LoadDigestFn, the currently selected step's rendered markdown digest.
+func (m Model) viewDigest() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · %s", m.historyLoop, m.selectedRun.IterationID)))
+
+	for i, s := range m.selectedRun.Steps {
+		cursor := "  "
+		if i == m.digestCursor {
+			cursor = style.Marker.Render("▸ ")
+		}
+		marker := " "
+		if s.HasDigest {
+			marker = "●"
+		}
+		line := fmt.Sprintf("%s%s %s", cursor, marker, s.Name)
+		if !s.HasDigest {
+			line = style.KeyHint.Render(line)
+		}
+		fmt.Fprintf(&b, "%s\n", line)
+	}
+	b.WriteString("\n")
+
+	switch {
+	case len(m.selectedRun.Steps) == 0:
+		b.WriteString("(no steps)\n")
+	case m.digestCursor >= len(m.selectedRun.Steps):
+		// out of range; nothing to show
+	case !m.selectedRun.Steps[m.digestCursor].HasDigest:
+		b.WriteString(style.KeyHint.Render("(no digest for this step)") + "\n")
+	case m.digestStep != m.selectedRun.Steps[m.digestCursor].Name:
+		b.WriteString(style.KeyHint.Render("(press enter to load)") + "\n")
+	default:
+		rendered, err := glamour.Render(m.digestContent, "auto")
+		if err != nil {
+			rendered = m.digestContent
+		}
+		b.WriteString(rendered)
+	}
+
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] load digest  [esc] back") + "\n")
 	return b.String()
 }
 
