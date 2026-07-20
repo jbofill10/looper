@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 
 	"github.com/jbofill10/looper/builder"
 	"github.com/jbofill10/looper/history"
@@ -710,6 +711,10 @@ func (m Model) View() string {
 		return m.viewFocus()
 	case viewBuilder:
 		return m.viewBuilder()
+	case viewRuns:
+		return m.viewRuns()
+	case viewDigest:
+		return m.viewDigest()
 	default:
 		return m.viewFleet()
 	}
@@ -819,6 +824,92 @@ func (m Model) viewFocus() string {
 		b.WriteString("\n" + style.Action.Render("[a] attach") + "\n")
 	}
 	b.WriteString("\n" + style.KeyHint.Render("[esc] back  [q] quit") + "\n")
+	return b.String()
+}
+
+// viewRuns renders the run-history list for m.historyLoop: one row per
+// iteration found on disk, newest first, with a ▸ cursor on the selected
+// row and a status glyph (running/done/aborted/no-work).
+func (m Model) viewRuns() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · run history", m.historyLoop)))
+	if len(m.history) == 0 {
+		b.WriteString("(no runs yet, or still loading)\n")
+	}
+	for i, e := range m.history {
+		cursor := "  "
+		if i == m.historyCursor {
+			cursor = style.Marker.Render("▸ ")
+		}
+		worker := e.WorkerID
+		if worker == "" {
+			worker = "-"
+		}
+		fmt.Fprintf(&b, "%s%-24s %-8s %s\n", cursor, e.IterationID, worker, historyStatusGlyph(e.Status))
+	}
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] view digests  [esc] back") + "\n")
+	return b.String()
+}
+
+// historyStatusGlyph renders a run-history entry's status as a glyph +
+// label, reusing the style package's existing glyph colors.
+func historyStatusGlyph(status string) string {
+	switch status {
+	case "running":
+		return style.GlyphRunning.Render("⚙ running")
+	case "done":
+		return style.GlyphDone.Render("✔ done")
+	case "aborted":
+		return style.GlyphNeedsYou.Render("✗ aborted")
+	case "no-work":
+		return style.GlyphEmpty.Render("∅ no-work")
+	default:
+		return status
+	}
+}
+
+// viewDigest renders m.selectedRun's steps (in loop config order, with a
+// marker for which captured a digest) and, once loaded via Options.
+// LoadDigestFn, the currently selected step's rendered markdown digest.
+func (m Model) viewDigest() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", style.Title.Render(fmt.Sprintf("%s · %s", m.historyLoop, m.selectedRun.IterationID)))
+
+	for i, s := range m.selectedRun.Steps {
+		cursor := "  "
+		if i == m.digestCursor {
+			cursor = style.Marker.Render("▸ ")
+		}
+		marker := " "
+		if s.HasDigest {
+			marker = "●"
+		}
+		line := fmt.Sprintf("%s%s %s", cursor, marker, s.Name)
+		if !s.HasDigest {
+			line = style.KeyHint.Render(line)
+		}
+		fmt.Fprintf(&b, "%s\n", line)
+	}
+	b.WriteString("\n")
+
+	switch {
+	case len(m.selectedRun.Steps) == 0:
+		b.WriteString("(no steps)\n")
+	case m.digestCursor >= len(m.selectedRun.Steps):
+		// out of range; nothing to show
+	case !m.selectedRun.Steps[m.digestCursor].HasDigest:
+		b.WriteString(style.KeyHint.Render("(no digest for this step)") + "\n")
+	case m.digestStep != m.selectedRun.Steps[m.digestCursor].Name:
+		b.WriteString(style.KeyHint.Render("(press enter to load)") + "\n")
+	default:
+		rendered, err := glamour.Render(m.digestContent, "auto")
+		if err != nil {
+			rendered = m.digestContent
+		}
+		b.WriteString(rendered)
+	}
+
+	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [enter] load digest  [esc] back") + "\n")
 	return b.String()
 }
 
