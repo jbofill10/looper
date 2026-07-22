@@ -11,7 +11,7 @@ import (
 // newAttachCmd builds the `looper attach` subcommand, which attaches the
 // local terminal to a run's live interactive session over the daemon's
 // Attach RPC: stdin is forwarded to the session (raw mode when stdin is a
-// terminal), the session's output is written to stdout, and Ctrl-b d
+// terminal), the session's output is written to stdout, and Ctrl-\ d
 // detaches without stopping the session (tmux-style).
 func newAttachCmd() *cobra.Command {
 	var socket string
@@ -29,7 +29,7 @@ func newAttachCmd() *cobra.Command {
 
 // runAttach dials the daemon and bridges the local terminal to runID's live
 // interactive session via the shared client.AttachStream, until the human
-// detaches (Ctrl-b d) or the session/stream ends.
+// detaches (Ctrl-\ d) or the session/stream ends.
 func runAttach(cmd *cobra.Command, runID, socket string) error {
 	c, conn, err := client.Dial(socket)
 	if err != nil {

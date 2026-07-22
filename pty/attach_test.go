@@ -11,7 +11,7 @@ import (
 // TestAttach_NonTTY_RoutesAndDetaches exercises Attach's routing loop without
 // a controlling terminal: in is the read end of a pipe, which is not a tty,
 // so the raw-mode branch (term.MakeRaw) must be skipped rather than erroring.
-// It writes a few plain bytes followed by the Ctrl-b d detach sequence and
+// It writes a few plain bytes followed by the Ctrl-\ d detach sequence and
 // asserts Attach returns nil once detached.
 func TestAttach_NonTTY_RoutesAndDetaches(t *testing.T) {
 	s, err := Start(Config{Argv: []string{"sh", "-c", "cat"}})
@@ -43,7 +43,7 @@ func TestAttach_NonTTY_RoutesAndDetaches(t *testing.T) {
 	if _, err := inW.Write([]byte("hello")); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}
-	if _, err := inW.Write([]byte{0x02, 'd'}); err != nil {
+	if _, err := inW.Write([]byte{0x1c, 'd'}); err != nil {
 		t.Fatalf("write detach sequence: %v", err)
 	}
 

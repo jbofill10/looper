@@ -11,7 +11,7 @@ import (
 // session in tmux-style raw mode: in is put into raw mode (if it is a
 // terminal), the session's scrollback is replayed to out, and out then
 // becomes the session's live writer for the duration of the attach. Input
-// read from in is scanned for the Ctrl-b d detach escape; everything else is
+// read from in is scanned for the Ctrl-\ d detach escape; everything else is
 // forwarded to the session. Attach returns nil when the human detaches or
 // when the session exits.
 //
