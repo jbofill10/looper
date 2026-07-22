@@ -161,7 +161,7 @@ func (s *Session) Wait() error {
 
 // RunAttached bridges in/out to s via Attach and waits for s to finish,
 // handling the one-shot local-attach case: the caller has no way to
-// reattach later, so if the human detaches (Ctrl-b d) while the child is
+// reattach later, so if the human detaches (Ctrl-\ d) while the child is
 // still running, that is treated as abandoning the session rather than as a
 // request to leave it running in the background — s is killed immediately
 // instead of being waited on indefinitely. If the child exits on its own

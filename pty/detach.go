@@ -3,17 +3,20 @@
 // attach/detach bridge for the human operator.
 package pty
 
-// ctrlB is the byte that begins the detach escape sequence (Ctrl-b).
-const ctrlB = 0x02
+// ctrlBackslash is the byte that begins the detach escape sequence
+// (Ctrl-\). Ctrl-b was considered but rejected: it collides with tmux's
+// default prefix, making looper impossible to detach from cleanly when
+// attached inside a tmux pane.
+const ctrlBackslash = 0x1c
 
-// detachEscapeByte is the byte that, following ctrlB, triggers a detach.
+// detachEscapeByte is the byte that, following ctrlBackslash, triggers a detach.
 const detachEscapeByte = 'd'
 
-// DetachScanner is a pure state machine recognizing the "Ctrl-b d" detach
+// DetachScanner is a pure state machine recognizing the "Ctrl-\ d" detach
 // escape sequence in a stream of input bytes. It is not safe for concurrent
 // use; callers must serialize calls to Scan. The zero value is ready to use.
 type DetachScanner struct {
-	armed bool // a lone Ctrl-b has been seen and awaits resolution
+	armed bool // a lone Ctrl-\ has been seen and awaits resolution
 }
 
 // Scan walks in byte by byte, recognizing the detach escape. Bytes that are
@@ -21,7 +24,7 @@ type DetachScanner struct {
 // passthrough. If the escape completes, detached is true, the triggering 'd'
 // is dropped, and any remaining bytes in in are not consumed. Armed state
 // persists across calls, so an escape split across two Scan calls (a
-// dangling Ctrl-b at the end of one call, resolved at the start of the
+// dangling Ctrl-\ at the end of one call, resolved at the start of the
 // next) is still recognized.
 func (d *DetachScanner) Scan(in []byte) (passthrough []byte, detached bool) {
 	for _, b := range in {
@@ -30,10 +33,10 @@ func (d *DetachScanner) Scan(in []byte) (passthrough []byte, detached bool) {
 			if b == detachEscapeByte {
 				return passthrough, true
 			}
-			passthrough = append(passthrough, ctrlB, b)
+			passthrough = append(passthrough, ctrlBackslash, b)
 			continue
 		}
-		if b == ctrlB {
+		if b == ctrlBackslash {
 			d.armed = true
 			continue
 		}

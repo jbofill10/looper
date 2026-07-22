@@ -104,7 +104,7 @@ func TestSession_RunAttached_DetachWhileRunningKillsSession(t *testing.T) {
 	// the detach escape, so it's actually observed as a mid-session detach
 	// rather than racing session startup.
 	time.Sleep(100 * time.Millisecond)
-	if _, err := inW.Write([]byte{0x02, 'd'}); err != nil {
+	if _, err := inW.Write([]byte{0x1c, 'd'}); err != nil {
 		t.Fatalf("write detach sequence: %v", err)
 	}
 

@@ -16,7 +16,7 @@ import (
 )
 
 // AttachStream opens the Attach bidi RPC for runID on cl and bridges it to
-// in/out until the human detaches (Ctrl-b d), the session ends, or ctx is
+// in/out until the human detaches (Ctrl-\ d), the session ends, or ctx is
 // cancelled. When in is a terminal, it is switched to raw mode for the
 // duration (and restored on return) and SIGWINCH triggers a resize message.
 // It is shared by the `looper attach` CLI command and the TUI's attach
@@ -32,7 +32,7 @@ func AttachStream(ctx context.Context, cl rpc.LooperClient, runID string, in, ou
 		return fmt.Errorf("sending attach start for run %s: %w", runID, err)
 	}
 
-	fmt.Fprintln(os.Stderr, "-- attached; Ctrl-b d to detach --")
+	fmt.Fprintln(os.Stderr, "-- attached; Ctrl-\\ d to detach --")
 
 	isTerm := term.IsTerminal(int(in.Fd()))
 	if isTerm {
@@ -113,7 +113,7 @@ func sendResize(stream rpc.Looper_AttachClient, out *os.File) {
 	}})
 }
 
-// forwardStdin reads cr, scanning for the Ctrl-b d detach escape, and sends
+// forwardStdin reads cr, scanning for the Ctrl-\ d detach escape, and sends
 // passthrough bytes as session input. It closes the stream's send direction
 // (signalling detach or "no more input" to the daemon, which leaves the
 // session itself running) once the human detaches or cr reaches EOF/error —
