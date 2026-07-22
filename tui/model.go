@@ -129,10 +129,26 @@ type workerRow struct {
 	Iteration      int
 }
 
+// liveInteractiveNeedsHuman mirrors the events.State values (from the
+// events package) that mean an interactive session is paused waiting on a
+// human mid-session — Claude asked a question, hit a permission prompt, or
+// simply stopped outputting — reported live via a "state"/interactive_state
+// Update while the session's process is still running, distinct from the
+// terminal decision_request sent after it exits.
+func liveInteractiveNeedsHuman(state string) bool {
+	switch state {
+	case "needs_human", "awaiting_input", "awaiting_approval":
+		return true
+	default:
+		return false
+	}
+}
+
 // needsHuman reports whether this row has a pending decision awaiting a
-// human response.
+// human response, or is a live interactive session currently paused waiting
+// on one (see liveInteractiveNeedsHuman).
 func (w workerRow) needsHuman() bool {
-	return w.PendingReqID != ""
+	return w.PendingReqID != "" || liveInteractiveNeedsHuman(w.State)
 }
 
 // finished reports whether this row's worker has completed its run and has
@@ -757,7 +773,7 @@ func (m Model) focusedRow() (workerRow, bool) {
 // working ⚙, needs-human ⏸, done ✔, or no-work ∅.
 func glyph(row workerRow) string {
 	switch {
-	case row.PendingReqID != "":
+	case row.PendingReqID != "" || liveInteractiveNeedsHuman(row.State):
 		return style.GlyphNeedsYou.Render("⏸")
 	case row.Status == "done" || row.Status == "stopped" || row.Status == "error":
 		return style.GlyphDone.Render("✔")

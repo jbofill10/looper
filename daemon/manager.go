@@ -632,7 +632,7 @@ func (m *Manager) onReport(runID, loopName string, r runner.Report) {
 			re.info.Iteration = r.Iteration
 		case runner.ReportStepStart:
 			re.info.CurrentStep = r.Step
-		case runner.ReportOutcome:
+		case runner.ReportOutcome, runner.ReportInteractiveState:
 			re.info.State = r.State
 		}
 		if ws, ok := re.workers[r.WorkerID]; ok {
@@ -641,7 +641,7 @@ func (m *Manager) onReport(runID, loopName string, r runner.Report) {
 				ws.iteration = r.Iteration
 			case runner.ReportStepStart:
 				ws.currentStep = r.Step
-			case runner.ReportOutcome:
+			case runner.ReportOutcome, runner.ReportInteractiveState:
 				ws.state = r.State
 			}
 			if r.Task != "" {

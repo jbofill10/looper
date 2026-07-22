@@ -31,6 +31,14 @@ type InteractiveExecutor struct {
 	// tests; defaults to runPTY. socketPath is the listener socket; env
 	// includes LOOPER_HOOK_SOCKET.
 	run func(argv, env []string, socketPath string) error
+
+	// OnState, if non-nil, is called synchronously from the hook-reading
+	// goroutine each time events.Derive produces a state for this session
+	// (e.g. "working", "needs_human", "awaiting_input"), while the PTY
+	// session is still running. This is the only way a caller learns the
+	// session is paused waiting on a human before it exits: the final
+	// outcome (Prompter.Interactive) only fires after run() returns.
+	OnState func(state string)
 }
 
 // Run builds the interactive session's prompt, hook settings, and argv,
@@ -52,6 +60,9 @@ func (e *InteractiveExecutor) Run(rc *runctx.RunContext, step config.Step) (Outc
 		for h := range l.Events() {
 			state = events.Derive(state, h, e.Harness.Sentinels)
 			_ = rc.AppendEvent(runctx.Event{Step: step.Name, Kind: "state", Message: string(state)})
+			if e.OnState != nil {
+				e.OnState(string(state))
+			}
 		}
 		doneCh <- state
 	}()

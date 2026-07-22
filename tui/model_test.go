@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jbofill10/looper/history"
+	"github.com/jbofill10/looper/style"
 )
 
 // send applies msg to m and returns the updated Model (discarding the cmd,
@@ -158,6 +159,54 @@ func TestModel_RunsSnapshotSkipsTerminalRuns(t *testing.T) {
 	}
 	if rows[0].RunID != "run-2" {
 		t.Fatalf("remaining row = %+v, want run-2's row", rows[0])
+	}
+}
+
+// TestModel_LiveInteractiveStateMarksNeedsHuman asserts that a worker whose
+// interactive session reports (mid-session, well before any decision_request
+// arrives) a hook-derived state of "needs_human"/"awaiting_input"/
+// "awaiting_approval" is treated as needs-human: it sorts first and counts
+// toward NeedYouCount, and its glyph is the pause icon rather than the
+// running gear. This is the live counterpart to decision_request, covering
+// the window where Claude is paused waiting on the human but the
+// interactive process hasn't exited yet.
+func TestModel_LiveInteractiveStateMarksNeedsHuman(t *testing.T) {
+	m := NewModel(Options{})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", LoopName: "loopA", WorkerID: "w1", Step: "plan"})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", LoopName: "loopA", WorkerID: "w2", Step: "plan"})
+
+	if got := m.NeedYouCount(); got != 0 {
+		t.Fatalf("NeedYouCount() = %d, want 0 before any live state update", got)
+	}
+
+	// w1's interactive session reports it's paused waiting on the human,
+	// while the underlying process is still running (no decision_request).
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "interactive_state", LoopName: "loopA", WorkerID: "w1", Step: "plan", State: "needs_human"})
+
+	if got := m.NeedYouCount(); got != 1 {
+		t.Fatalf("NeedYouCount() = %d, want 1 after live needs_human state", got)
+	}
+	rows := m.Workers()
+	first := rows[0]
+	if first.WorkerID != "w1" {
+		t.Fatalf("first row = %+v, want w1 sorted to top as needs-human", first)
+	}
+	if first.PendingReqID != "" {
+		t.Fatalf("first row PendingReqID = %q, want empty (no decision_request involved)", first.PendingReqID)
+	}
+	if got := glyph(first); got != style.GlyphNeedsYou.Render("⏸") {
+		t.Fatalf("glyph(w1) = %q, want the needs-human pause glyph", got)
+	}
+	for _, r := range rows {
+		if r.WorkerID == "w2" && r.PendingReqID != "" {
+			t.Fatalf("w2 unexpectedly marked pending: %+v", r)
+		}
+	}
+
+	// A subsequent "working" state clears the needs-human flag.
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "interactive_state", LoopName: "loopA", WorkerID: "w1", Step: "plan", State: "working"})
+	if got := m.NeedYouCount(); got != 0 {
+		t.Fatalf("NeedYouCount() = %d, want 0 after state moves back to working", got)
 	}
 }
 
