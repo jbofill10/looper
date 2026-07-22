@@ -72,16 +72,16 @@ func TestModel_WorkersAggregationAndOrdering(t *testing.T) {
 		}
 	}
 
-	// run_done marks run-1's workers done, which excludes them from the
-	// fleet view entirely (finished runs are no longer active).
+	// run_done removes run-1's workers from the fleet view entirely: a
+	// finished run's history belongs in viewRuns, not lingering here.
 	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "run_done", LoopName: "loopA", State: "done"})
 	for _, r := range m.Workers() {
 		if r.RunID == "run-1" {
-			t.Fatalf("run-1 worker %s still present after run_done, want excluded as finished", r.WorkerID)
+			t.Fatalf("run-1 worker %s still present after run_done, want removed: %+v", r.WorkerID, r)
 		}
 	}
 	if got := len(m.Workers()); got != 2 {
-		t.Fatalf("Workers() count after run-1 finished = %d, want 2 (only run-2's workers)", got)
+		t.Fatalf("Workers() count after run-1 run_done = %d, want 2 (run-2 only)", got)
 	}
 }
 
@@ -99,6 +99,65 @@ func TestModel_FinishedWorkersExcludedFromFleetView(t *testing.T) {
 		if len(rows) != 1 || rows[0].RunID != "run-2" {
 			t.Fatalf("Workers() with run-1 status %q = %+v, want only run-2's row", status, rows)
 		}
+	}
+}
+
+// TestModel_RunDoneDoesNotLeaveStaleDuplicateStepRows is a regression test
+// for a fleet-view bug: a finished run's rows lingered in Model.workers
+// forever (never evicted), so a later run reusing the same step names
+// appeared to duplicate every step — one stale "done" row next to the
+// active run's row for that same step. run_done must remove the finished
+// run's rows outright.
+func TestModel_RunDoneDoesNotLeaveStaleDuplicateStepRows(t *testing.T) {
+	m := NewModel(Options{})
+
+	// run-1 (concurrency=1, WorkerID "") runs through get-tasks/pick-task
+	// and finishes.
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", LoopName: "loopA", Step: "get-tasks", Task: "t"})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", LoopName: "loopA", Step: "pick-task", Task: "t"})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "run_done", LoopName: "loopA", State: "done"})
+
+	// run-2 (concurrency>=1, worker w1) starts on the very same steps.
+	m = send(t, m, StateUpdateMsg{RunID: "run-2", Kind: "step_start", LoopName: "loopA", WorkerID: "w1", Step: "get-tasks", Task: "t"})
+
+	rows := m.Workers()
+	if len(rows) != 1 {
+		t.Fatalf("Workers() = %+v, want exactly 1 row (run-1 should have been evicted by run_done)", rows)
+	}
+	if rows[0].RunID != "run-2" {
+		t.Fatalf("remaining row = %+v, want run-2's row", rows[0])
+	}
+}
+
+// TestModel_RunsSnapshotSkipsTerminalRuns is a regression test for the same
+// stale-row bug via the startup ListRuns snapshot path: the daemon never
+// evicts finished runs, so a snapshot can include runs that already reached
+// a terminal status. applyRunsSnapshot must not populate (or must evict)
+// rows for those, or they'd sit in the fleet view forever alongside later
+// active runs on the same steps.
+func TestModel_RunsSnapshotSkipsTerminalRuns(t *testing.T) {
+	m := NewModel(Options{})
+	m = send(t, m, StateUpdateMsg{RunID: "run-2", Kind: "step_start", LoopName: "loopA", WorkerID: "w1", Step: "get-tasks", Task: "t"})
+
+	updated, _ := m.Update(RunsSnapshotMsg{
+		{RunID: "run-1", LoopName: "loopA", Status: "done", Workers: []WorkerSnapshot{
+			{WorkerID: "", CurrentStep: "get-tasks", Status: "done"},
+		}},
+		{RunID: "run-2", LoopName: "loopA", Status: "running", Workers: []WorkerSnapshot{
+			{WorkerID: "w1", CurrentStep: "get-tasks", Status: "running"},
+		}},
+	})
+	m, ok := updated.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want Model", updated)
+	}
+
+	rows := m.Workers()
+	if len(rows) != 1 {
+		t.Fatalf("Workers() = %+v, want exactly 1 row (terminal run-1 should be skipped/evicted)", rows)
+	}
+	if rows[0].RunID != "run-2" {
+		t.Fatalf("remaining row = %+v, want run-2's row", rows[0])
 	}
 }
 

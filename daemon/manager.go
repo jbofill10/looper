@@ -325,7 +325,7 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string, concurr
 			AcquireLock:  acquireLock,
 			GracefulStop: re.graceful,
 			InteractiveRun: func(argv, env []string, socketPath string) error {
-				return m.runInteractiveSession(ctx, re, runID, argv, env)
+				return m.runInteractiveSession(ctx, re, runID, loop.Name, workerID, argv, env)
 			},
 			OnReport: func(r runner.Report) {
 				m.onReport(runID, loop.Name, r)
@@ -451,7 +451,7 @@ func (m *Manager) Session(runID string) (*pty.Session, bool) {
 // auto-attach to the daemon's own stdio; a client attaches remotely via the
 // Attach RPC. If ctx is cancelled (StopLoop) before the session exits on its
 // own, the session is killed so the run can end promptly.
-func (m *Manager) runInteractiveSession(ctx context.Context, re *runEntry, runID string, argv, env []string) error {
+func (m *Manager) runInteractiveSession(ctx context.Context, re *runEntry, runID, loopName, workerID string, argv, env []string) error {
 	sess, err := pty.Start(pty.Config{Argv: argv, Env: env, Dir: workdirFromEnv(env)})
 	if err != nil {
 		return err
@@ -459,7 +459,7 @@ func (m *Manager) runInteractiveSession(ctx context.Context, re *runEntry, runID
 	re.setSession(sess)
 	defer re.clearSession()
 
-	m.publish(Update{RunID: runID, Kind: "state", State: "session_live"})
+	m.publish(Update{RunID: runID, Kind: "state", LoopName: loopName, WorkerID: workerID, State: "session_live"})
 
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- sess.Wait() }()

@@ -861,7 +861,7 @@ func (m Model) viewFleet() string {
 		if !m.loopsFocused && i == m.cursor {
 			cursor = style.Marker.Render("▸ ")
 		}
-		fmt.Fprintf(&b, "%s%-8s %-14s %-12s %s\n", cursor, r.WorkerID, r.Task, r.Step, glyph(r))
+		fmt.Fprintf(&b, "%s%-14s %-8s %-14s %-12s %s\n", cursor, r.LoopName, r.WorkerID, r.Task, r.Step, glyph(r))
 	}
 	b.WriteString("\n" + style.KeyHint.Render("[up/down] move  [tab] switch focus  [space] expand/collapse  [enter] focus  [t] toggle  [s] toggle schedule  [o] run once  [g] graceful stop  [x] abort  [R] rename  [D] delete  [n] new loop  [q] quit") + "\n")
 	return b.String()
@@ -1022,23 +1022,13 @@ func (m Model) viewNaming() string {
 //   - any other per-worker update (step_start, outcome, state, iteration)
 //     clears a previously pending decision (the worker has moved on) and
 //     updates the row's displayed fields.
-//   - run_done marks every worker of the run as done and clears any
-//     pending decision (the run no longer needs a response).
+//   - run_done removes every worker row of the run from the fleet view.
+//     The fleet view only shows active work; a finished run's history
+//     remains available via the run-history view (viewRuns), so its rows
+//     don't need to linger here.
 func (m *Model) applyStateUpdate(msg StateUpdateMsg) {
 	if msg.Kind == "run_done" {
-		for _, key := range m.order {
-			if key.RunID != msg.RunID {
-				continue
-			}
-			row := m.workers[key]
-			row.Status = "done"
-			if msg.State != "" {
-				row.Status = msg.State
-			}
-			row.PendingReqID = ""
-			row.PendingOptions = nil
-			m.workers[key] = row
-		}
+		m.removeRun(msg.RunID)
 		return
 	}
 
@@ -1077,11 +1067,38 @@ func (m *Model) applyStateUpdate(msg StateUpdateMsg) {
 	m.workers[key] = row
 }
 
-// applyRunsSnapshot upserts a worker row for every worker in snap, without
-// disturbing any pending decision already recorded for that worker (a
-// snapshot never carries decision-request information).
+// removeRun deletes every worker row belonging to runID from m.workers and
+// m.order.
+func (m *Model) removeRun(runID string) {
+	kept := m.order[:0]
+	for _, key := range m.order {
+		if key.RunID == runID {
+			delete(m.workers, key)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	m.order = kept
+}
+
+// runTerminal reports whether status is one of the terminal run/worker
+// statuses ("done", "stopped", "error").
+func runTerminal(status string) bool {
+	return status == "done" || status == "stopped" || status == "error"
+}
+
+// applyRunsSnapshot upserts a worker row for every worker in a still-active
+// run in snap, without disturbing any pending decision already recorded for
+// that worker (a snapshot never carries decision-request information).
+// Runs already in a terminal state are skipped (and removed if previously
+// tracked): the fleet view only shows active work, and a finished run's
+// history remains available via the run-history view (viewRuns).
 func (m *Model) applyRunsSnapshot(snap RunsSnapshotMsg) {
 	for _, run := range snap {
+		if runTerminal(run.Status) {
+			m.removeRun(run.RunID)
+			continue
+		}
 		for _, w := range run.Workers {
 			key := workerKey{RunID: run.RunID, WorkerID: w.WorkerID}
 			row, ok := m.workers[key]
