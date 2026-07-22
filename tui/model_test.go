@@ -72,11 +72,32 @@ func TestModel_WorkersAggregationAndOrdering(t *testing.T) {
 		}
 	}
 
-	// run_done marks run-1's workers done.
+	// run_done marks run-1's workers done, which excludes them from the
+	// fleet view entirely (finished runs are no longer active).
 	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "run_done", LoopName: "loopA", State: "done"})
 	for _, r := range m.Workers() {
-		if r.RunID == "run-1" && r.Status != "done" {
-			t.Fatalf("run-1 worker %s Status = %q, want done", r.WorkerID, r.Status)
+		if r.RunID == "run-1" {
+			t.Fatalf("run-1 worker %s still present after run_done, want excluded as finished", r.WorkerID)
+		}
+	}
+	if got := len(m.Workers()); got != 2 {
+		t.Fatalf("Workers() count after run-1 finished = %d, want 2 (only run-2's workers)", got)
+	}
+}
+
+// TestModel_FinishedWorkersExcludedFromFleetView asserts that a worker row
+// whose Status is done/stopped/error is hidden from Workers() (the fleet
+// view), unless it has a pending decision request awaiting a response.
+func TestModel_FinishedWorkersExcludedFromFleetView(t *testing.T) {
+	m := NewModel(Options{})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", LoopName: "loopA", WorkerID: "w1", Task: "t", Step: "s"})
+	m = send(t, m, StateUpdateMsg{RunID: "run-2", Kind: "step_start", LoopName: "loopB", WorkerID: "w1", Task: "t", Step: "s"})
+
+	for _, status := range []string{"done", "stopped", "error"} {
+		m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "run_done", LoopName: "loopA", State: status})
+		rows := m.Workers()
+		if len(rows) != 1 || rows[0].RunID != "run-2" {
+			t.Fatalf("Workers() with run-1 status %q = %+v, want only run-2's row", status, rows)
 		}
 	}
 }

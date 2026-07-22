@@ -135,6 +135,14 @@ func (w workerRow) needsHuman() bool {
 	return w.PendingReqID != ""
 }
 
+// finished reports whether this row's worker has completed its run and has
+// no pending decision awaiting a response. Finished rows are excluded from
+// the fleet view (Workers) — completed runs remain reachable via a loop's
+// run history (the h key) rather than cluttering the live fleet.
+func (w workerRow) finished() bool {
+	return !w.needsHuman() && (w.Status == "done" || w.Status == "stopped" || w.Status == "error")
+}
+
 // workerKey identifies a worker row within Model.workers.
 type workerKey struct {
 	RunID    string
@@ -1092,11 +1100,15 @@ func (m *Model) applyRunsSnapshot(snap RunsSnapshotMsg) {
 	}
 }
 
-// Workers returns the current worker rows, sorted with needs-human workers
-// first, then by RunID, then by WorkerID.
+// Workers returns the current active worker rows (excluding finished ones,
+// see workerRow.finished), sorted with needs-human workers first, then by
+// RunID, then by WorkerID.
 func (m Model) Workers() []workerRow {
 	rows := make([]workerRow, 0, len(m.workers))
 	for _, row := range m.workers {
+		if row.finished() {
+			continue
+		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {

@@ -145,6 +145,42 @@ func TestManager_ScriptLoopRunsToCompletion(t *testing.T) {
 	}
 }
 
+// TestManager_SubscribeReplayCarriesWorkerID starts a run to completion,
+// then subscribes a late client and checks its synthetic replay updates
+// carry the run's real worker id rather than an empty one. An empty
+// WorkerID here would key a distinct, phantom row in a client (like the
+// fleet TUI) that keys state by (RunID, WorkerID), producing a duplicate
+// row for the same worker with no Status ever set.
+func TestManager_SubscribeReplayCarriesWorkerID(t *testing.T) {
+	dir := t.TempDir()
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	path := writeLoopFile(t, dir, loop)
+
+	m := newTestManager(t)
+	ch, unsub := m.Subscribe("")
+	runID, err := m.StartLoop("", path, filepath.Join(dir, ".looper"), dir, 0)
+	if err != nil {
+		t.Fatalf("StartLoop: %v", err)
+	}
+	drainUntilRunDone(t, ch)
+	unsub()
+
+	lateCh, lateUnsub := m.Subscribe("")
+	defer lateUnsub()
+
+	replay := recvUpdate(t, lateCh)
+	if replay.RunID != runID {
+		t.Fatalf("replay RunID = %q, want %q", replay.RunID, runID)
+	}
+	if replay.WorkerID == "" {
+		t.Fatalf("replay WorkerID is empty, want the run's real worker id (e.g. %q)", "w1")
+	}
+}
+
 func TestManager_ManualStepDecisionRequestAdvance(t *testing.T) {
 	dir := t.TempDir()
 	loop := &config.Loop{
