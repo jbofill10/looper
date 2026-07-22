@@ -160,7 +160,7 @@ func TestWorker_ExecutorForInteractive(t *testing.T) {
 	w := newWorker(t, loop, &FakePrompter{})
 	w.LooperBin = "/usr/local/bin/looper"
 
-	exec, err := w.executorFor(loop.Steps[0])
+	exec, err := w.executorFor(loop.Steps[0], nil)
 	if err != nil {
 		t.Fatalf("executorFor: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestWorker_ExecutorForInteractiveUsesInjectedRun(t *testing.T) {
 		return nil
 	}
 
-	exec, err := w.executorFor(loop.Steps[0])
+	exec, err := w.executorFor(loop.Steps[0], nil)
 	if err != nil {
 		t.Fatalf("executorFor: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestWorker_UnknownStepTypeErrors(t *testing.T) {
 		Steps:         []config.Step{{Name: "plan", Type: "bogus", Prompt: "hi"}},
 	}
 	w := newWorker(t, loop, &FakePrompter{})
-	_, err := w.executorFor(loop.Steps[0])
+	_, err := w.executorFor(loop.Steps[0], nil)
 	if err == nil || !strings.Contains(err.Error(), "unknown type") {
 		t.Fatalf("expected 'unknown type' error, got %v", err)
 	}

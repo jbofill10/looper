@@ -90,6 +90,63 @@ func TestInteractive_DonePath(t *testing.T) {
 	}
 }
 
+// TestInteractive_OnStateFiresLiveBeforeRunReturns asserts that OnState is
+// called synchronously as each hook-derived state is reached, from inside
+// the fake run (i.e. while the interactive session is still "running"),
+// rather than only once at the end via the final outcome. This is what lets
+// a caller (the daemon) learn a session is paused waiting on a human before
+// the underlying process exits — the gap that previously left the fleet
+// view showing a live interactive session as "running" for its whole
+// duration, even once it had stopped and needed a human.
+func TestInteractive_OnStateFiresLiveBeforeRunReturns(t *testing.T) {
+	rc := newRC(t)
+	h := claudeHarness()
+	fp := &FakePrompter{InteractiveOutcome: OutcomeAdvance}
+
+	var seenBeforeReturn []string
+	var seenAfterReturn []string
+	returned := false
+
+	exec := &InteractiveExecutor{
+		Harness:  h,
+		Prompter: fp,
+		OnState: func(state string) {
+			if returned {
+				seenAfterReturn = append(seenAfterReturn, state)
+			} else {
+				seenBeforeReturn = append(seenBeforeReturn, state)
+			}
+		},
+		run: func(argv, env []string, socketPath string) error {
+			sendHook(t, socketPath, events.Hook{EventName: "PreToolUse", ToolName: "Bash"})
+			sendHook(t, socketPath, events.Hook{
+				EventName:            "Stop",
+				LastAssistantMessage: "all wrapped up " + h.Sentinels.Done,
+			})
+			return nil
+		},
+	}
+	step := config.Step{Name: "session", Type: config.StepInteractive, Prompt: "do the thing"}
+
+	if _, err := exec.Run(rc, step); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	returned = true
+
+	want := []string{string(events.StateWorking), string(events.StateAwaitingApproval)}
+	if len(seenBeforeReturn) != len(want) {
+		t.Fatalf("OnState calls before Run returned = %v, want %v", seenBeforeReturn, want)
+	}
+	for i, w := range want {
+		if seenBeforeReturn[i] != w {
+			t.Errorf("OnState[%d] = %q, want %q", i, seenBeforeReturn[i], w)
+		}
+	}
+	if len(seenAfterReturn) != 0 {
+		t.Errorf("OnState called %d times after Run returned, want 0 (all live)", len(seenAfterReturn))
+	}
+}
+
 func TestInteractive_NoWorkPath(t *testing.T) {
 	rc := newRC(t)
 	h := claudeHarness()

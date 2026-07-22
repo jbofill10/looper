@@ -14,10 +14,11 @@ import (
 
 // Report kinds emitted via Worker.OnReport.
 const (
-	ReportIteration = "iteration"
-	ReportStepStart = "step_start"
-	ReportOutcome   = "outcome"
-	ReportRunDone   = "run_done"
+	ReportIteration        = "iteration"
+	ReportStepStart        = "step_start"
+	ReportOutcome          = "outcome"
+	ReportRunDone          = "run_done"
+	ReportInteractiveState = "interactive_state"
 )
 
 // Report is a single progress event emitted by a Worker while running a
@@ -272,7 +273,7 @@ func (w *Worker) runIteration(iter int, id string, resumeDir string) (stop bool,
 			return false, err
 		}
 		step := w.Loop.Steps[i]
-		exec, err := w.executorFor(step)
+		exec, err := w.executorFor(step, rc)
 		if err != nil {
 			return false, err
 		}
@@ -325,7 +326,10 @@ func (w *Worker) runStep(exec Executor, rc *runctx.RunContext, step config.Step)
 	return exec.Run(rc, step)
 }
 
-func (w *Worker) executorFor(step config.Step) (Executor, error) {
+// executorFor builds the Executor for step. rc is only used to report a
+// StepInteractive executor's live session state (via OnState) tagged with
+// the iteration's current task.
+func (w *Worker) executorFor(step config.Step, rc *runctx.RunContext) (Executor, error) {
 	switch step.Type {
 	case config.StepScript:
 		return &ScriptExecutor{Prompter: w.Prompter}, nil
@@ -342,7 +346,15 @@ func (w *Worker) executorFor(step config.Step) (Executor, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &InteractiveExecutor{Harness: h, Prompter: w.Prompter, LooperBin: w.LooperBin, run: w.InteractiveRun}, nil
+		return &InteractiveExecutor{
+			Harness:   h,
+			Prompter:  w.Prompter,
+			LooperBin: w.LooperBin,
+			run:       w.InteractiveRun,
+			OnState: func(state string) {
+				w.reportTask(rc, Report{Kind: ReportInteractiveState, Step: step.Name, State: state})
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("step %q: unknown type %q", step.Name, step.Type)
 	}
