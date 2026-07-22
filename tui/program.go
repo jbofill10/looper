@@ -99,7 +99,10 @@ func authorFn(pp **tea.Program, global *config.Global, wd string) func(builder.A
 				if err := p.ReleaseTerminal(); err != nil {
 					return builder.SessionDoneMsg{Err: err}
 				}
-				defer p.RestoreTerminal()
+				defer func() {
+					p.RestoreTerminal()
+					p.Send(tea.ClearScreen())
+				}()
 			}
 
 			h, err := global.ResolveHarness("claude")
@@ -150,7 +153,10 @@ func attachFn(ctx context.Context, cl rpc.LooperClient, pp **tea.Program) func(r
 				if err := p.ReleaseTerminal(); err != nil {
 					return ErrMsg{Err: err}
 				}
-				defer p.RestoreTerminal()
+				defer func() {
+					p.RestoreTerminal()
+					p.Send(tea.ClearScreen())
+				}()
 			}
 			if err := client.AttachStream(ctx, cl, runID, os.Stdin, os.Stdout); err != nil {
 				return ErrMsg{Err: err}
