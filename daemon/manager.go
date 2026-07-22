@@ -525,8 +525,8 @@ func workersSnapshot(workers map[string]*workerState) []WorkerInfo {
 // Subscribe registers a new subscriber and returns its update channel (cap
 // 64) and an unsubscribe function that removes and closes it. An empty
 // runID subscribes to updates from all runs. On subscribe, a synthetic
-// "state" Update is sent for each currently-known matching run so a late
-// subscriber immediately sees current state.
+// "state" Update is sent for each of a matching run's known workers so a
+// late subscriber immediately sees current state.
 func (m *Manager) Subscribe(runID string) (<-chan Update, func()) {
 	sub := &subscriber{ch: make(chan Update, 64), runID: runID}
 
@@ -535,11 +535,18 @@ func (m *Manager) Subscribe(runID string) (<-chan Update, func()) {
 	m.nextSubID++
 	m.subs[id] = sub
 
-	var snapshot []RunInfo
+	var snapshot []Update
 	var pendingUpdates []Update
 	for rid, re := range m.runs {
 		if runID == "" || rid == runID {
-			snapshot = append(snapshot, re.info)
+			for workerID, ws := range re.workers {
+				snapshot = append(snapshot, Update{
+					RunID: re.info.RunID, Kind: "state", LoopName: re.info.LoopName,
+					Iteration: ws.iteration, Step: ws.currentStep,
+					State: ws.state, Message: re.info.Err,
+					WorkerID: workerID, Task: ws.task,
+				})
+			}
 			for _, p := range re.pending {
 				pendingUpdates = append(pendingUpdates, p.update)
 			}
@@ -547,12 +554,8 @@ func (m *Manager) Subscribe(runID string) (<-chan Update, func()) {
 	}
 	m.mu.Unlock()
 
-	for _, info := range snapshot {
-		sub.send(Update{
-			RunID: info.RunID, Kind: "state", LoopName: info.LoopName,
-			Iteration: info.Iteration, Step: info.CurrentStep,
-			State: info.State, Message: info.Err,
-		})
+	for _, u := range snapshot {
+		sub.send(u)
 	}
 	// Replay any still-unanswered decision requests: a subscriber that
 	// joins after one was published (and thus missed it on the fan-out)
