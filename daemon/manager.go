@@ -315,7 +315,6 @@ func (m *Manager) StartLoop(loopName, loopFile, baseDir, workdir string, concurr
 		w := &runner.Worker{
 			Loop:         loop,
 			BaseDir:      baseDir,
-			Workdir:      workdir,
 			Prompter:     prompter,
 			Global:       m.global,
 			LooperBin:    m.looperBin,

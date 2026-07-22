@@ -23,7 +23,6 @@ func TestRunLoop_ExecutesScriptLoop(t *testing.T) {
 	err := RunLoop(RunOptions{
 		LoopName: "t",
 		BaseDir:  filepath.Join(repo, ".looper"),
-		Workdir:  repo,
 		In:       strings.NewReader(""),
 		Out:      &strings.Builder{},
 	})
@@ -59,7 +58,6 @@ func TestRunLoop_ScriptLoopUnaffectedByLooperBinWiring(t *testing.T) {
 	err := RunLoop(RunOptions{
 		LoopName: "t2",
 		BaseDir:  filepath.Join(repo, ".looper"),
-		Workdir:  repo,
 		In:       strings.NewReader(""),
 		Out:      &strings.Builder{},
 	})
