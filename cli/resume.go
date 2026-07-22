@@ -106,7 +106,6 @@ func newResumeCmd() *cobra.Command {
 			opts := RunOptions{
 				File:    file,
 				BaseDir: baseDir,
-				Workdir: wd,
 				In:      cmd.InOrStdin(),
 				Out:     cmd.OutOrStdout(),
 			}

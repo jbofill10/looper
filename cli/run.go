@@ -29,7 +29,6 @@ type RunOptions struct {
 	LoopName string    // loads BaseDir/loops/<LoopName>.yaml when File is empty
 	File     string    // explicit loop file path (overrides LoopName)
 	BaseDir  string    // the .looper directory
-	Workdir  string    // execution dir for workspace: shared
 	In       io.Reader // prompter input (defaults to os.Stdin)
 	Out      io.Writer // prompter/output (defaults to os.Stdout)
 
@@ -74,7 +73,6 @@ func RunLoop(opts RunOptions) error {
 	w := &runner.Worker{
 		Loop:      loop,
 		BaseDir:   opts.BaseDir,
-		Workdir:   opts.Workdir,
 		Prompter:  &runner.StdinPrompter{In: in, Out: out},
 		Global:    global,
 		LooperBin: looperBin,
@@ -103,7 +101,6 @@ func newRunCmd() *cobra.Command {
 			opts := RunOptions{
 				File:    file,
 				BaseDir: filepath.Join(wd, ".looper"),
-				Workdir: wd,
 				In:      cmd.InOrStdin(),
 				Out:     cmd.OutOrStdout(),
 			}

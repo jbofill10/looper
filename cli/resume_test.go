@@ -145,7 +145,6 @@ func TestRunLoop_ResumeDirSkipsCompletedStep(t *testing.T) {
 	err = RunLoop(RunOptions{
 		LoopName:  "r",
 		BaseDir:   baseDir,
-		Workdir:   repo,
 		In:        strings.NewReader(""),
 		Out:       &strings.Builder{},
 		ResumeDir: resumeDir,
