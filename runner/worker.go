@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,7 +42,6 @@ type Report struct {
 type Worker struct {
 	Loop        *config.Loop
 	BaseDir     string // the .looper dir
-	Workdir     string // execution dir (workspace: shared)
 	Prompter    Prompter
 	NewID       func() string
 	Global      *config.Global // harness configuration; defaults to config.DefaultGlobal()
@@ -163,6 +163,22 @@ func (w *Worker) idGen() func() string {
 	}
 }
 
+// workDir returns this worker's execution directory for script/headless/
+// interactive steps: BaseDir/work/<loop name>/<worker ID>, or
+// BaseDir/work/<loop name> when the worker has no ID (single-worker
+// `looper run`) — mirroring the ID-namespacing runIteration already
+// applies to run-history directories. Creates the directory if missing.
+func (w *Worker) workDir() (string, error) {
+	dir := filepath.Join(w.BaseDir, "work", w.Loop.Name)
+	if w.ID != "" {
+		dir = filepath.Join(dir, w.ID)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir workdir %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
 // Run executes iterations until get-task signals no-work, max_iterations is
 // reached, or a step aborts the loop.
 func (w *Worker) Run() error {
@@ -229,7 +245,11 @@ func (w *Worker) runIteration(iter int, id string, resumeDir string) (stop bool,
 			return false, fmt.Errorf("resume %s: %w", dir, err)
 		}
 		if v, ok := rc.Get("WORKDIR"); !ok || v == "" {
-			rc.Set("WORKDIR", w.Workdir)
+			wd, err := w.workDir()
+			if err != nil {
+				return false, err
+			}
+			rc.Set("WORKDIR", wd)
 		}
 	} else {
 		dir = filepath.Join(w.BaseDir, "runs", w.Loop.Name, id)
@@ -240,7 +260,11 @@ func (w *Worker) runIteration(iter int, id string, resumeDir string) (stop bool,
 		if err != nil {
 			return false, err
 		}
-		rc.Set("WORKDIR", w.Workdir)
+		wd, err := w.workDir()
+		if err != nil {
+			return false, err
+		}
+		rc.Set("WORKDIR", wd)
 		// Persist context.json immediately so the iteration is visible to
 		// disk-based scanning (e.g. history.Scan) as soon as its directory
 		// exists, rather than only after its first step's outcome is

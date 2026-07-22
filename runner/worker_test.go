@@ -22,11 +22,9 @@ func idSeq() func() string {
 func newWorker(t *testing.T, loop *config.Loop, p Prompter) *Worker {
 	t.Helper()
 	base := filepath.Join(t.TempDir(), ".looper")
-	work := t.TempDir()
 	return &Worker{
 		Loop:     loop,
 		BaseDir:  base,
-		Workdir:  work,
 		Prompter: p,
 		NewID:    idSeq(),
 	}
@@ -385,7 +383,6 @@ echo TASK_ID=$n >> "$LOOPER_OUTPUT"
 			w := &Worker{
 				Loop:        loop,
 				BaseDir:     base,
-				Workdir:     dir,
 				Prompter:    &FakePrompter{},
 				ID:          id,
 				AcquireLock: &lock,
@@ -652,7 +649,6 @@ func TestWorker_GracefulStopEndsAfterCurrentIteration(t *testing.T) {
 	w := &Worker{
 		Loop:         loop,
 		BaseDir:      filepath.Join(dir, ".looper"),
-		Workdir:      dir,
 		GracefulStop: graceful,
 		OnReport: func(r Report) {
 			if r.Kind == ReportIteration {
@@ -669,5 +665,96 @@ func TestWorker_GracefulStopEndsAfterCurrentIteration(t *testing.T) {
 	}
 	if len(iterations) != 1 || iterations[0] != 1 {
 		t.Errorf("iterations reported = %v, want [1] (graceful stop must not prevent iteration 1 from running, but must prevent iteration 2)", iterations)
+	}
+}
+
+// TestWorker_WorkdirDefaultsUnderBaseDirPerWorker asserts that a worker with
+// an ID gets WORKDIR set to BaseDir/work/<loop>/<worker-id>, and that the
+// directory actually exists on disk after the run.
+func TestWorker_WorkdirDefaultsUnderBaseDirPerWorker(t *testing.T) {
+	base := filepath.Join(t.TempDir(), ".looper")
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	if err := loop.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	w := &Worker{Loop: loop, BaseDir: base, Prompter: &FakePrompter{}, ID: "w1", NewID: idSeq()}
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := filepath.Join(base, "work", "l", "w1")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected workdir %s to exist: %v", want, err)
+	}
+
+	rc, err := runctx.Load(filepath.Join(base, "runs", "l", "w1", "iter-1"))
+	if err != nil {
+		t.Fatalf("load run context: %v", err)
+	}
+	if got, _ := rc.Get("WORKDIR"); got != want {
+		t.Errorf("WORKDIR = %q, want %q", got, want)
+	}
+}
+
+// TestWorker_WorkdirDefaultsUnderBaseDirNoID asserts the single-worker
+// (`looper run`) case, where Worker.ID is unset: WORKDIR should be
+// BaseDir/work/<loop>, with no ID segment.
+func TestWorker_WorkdirDefaultsUnderBaseDirNoID(t *testing.T) {
+	base := filepath.Join(t.TempDir(), ".looper")
+	loop := &config.Loop{
+		Name:          "l",
+		MaxIterations: 1,
+		Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+	}
+	if err := loop.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	w := &Worker{Loop: loop, BaseDir: base, Prompter: &FakePrompter{}, NewID: idSeq()}
+	if err := w.Run(); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := filepath.Join(base, "work", "l")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("expected workdir %s to exist: %v", want, err)
+	}
+}
+
+// TestWorker_WorkdirIsolatedPerLoopAndWorker asserts two workers for
+// different loops (sharing the same BaseDir, same worker ID "w1") get
+// distinct workdirs, each created on disk.
+func TestWorker_WorkdirIsolatedPerLoopAndWorker(t *testing.T) {
+	base := filepath.Join(t.TempDir(), ".looper")
+	mkLoop := func(name string) *config.Loop {
+		l := &config.Loop{
+			Name:          name,
+			MaxIterations: 1,
+			Steps:         []config.Step{{Name: "s", Type: config.StepScript, Run: "true"}},
+		}
+		if err := l.Validate(); err != nil {
+			t.Fatalf("validate %s: %v", name, err)
+		}
+		return l
+	}
+	w1 := &Worker{Loop: mkLoop("a"), BaseDir: base, Prompter: &FakePrompter{}, ID: "w1", NewID: idSeq()}
+	w2 := &Worker{Loop: mkLoop("b"), BaseDir: base, Prompter: &FakePrompter{}, ID: "w1", NewID: idSeq()}
+	if err := w1.Run(); err != nil {
+		t.Fatalf("w1 Run: %v", err)
+	}
+	if err := w2.Run(); err != nil {
+		t.Fatalf("w2 Run: %v", err)
+	}
+
+	dirA := filepath.Join(base, "work", "a", "w1")
+	dirB := filepath.Join(base, "work", "b", "w1")
+	if _, err := os.Stat(dirA); err != nil {
+		t.Errorf("dirA %s missing: %v", dirA, err)
+	}
+	if _, err := os.Stat(dirB); err != nil {
+		t.Errorf("dirB %s missing: %v", dirB, err)
 	}
 }
