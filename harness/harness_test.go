@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jbofill10/looper/config"
@@ -69,6 +70,36 @@ func TestBuildStepAuthoring(t *testing.T) {
 func TestBuildStepAuthoring_NoInteractiveCommandErrors(t *testing.T) {
 	if _, err := BuildStepAuthoring(config.Harness{}, "p", "/dir"); err == nil {
 		t.Fatal("expected an error for a harness with no interactive command")
+	}
+}
+
+func TestSentinelInstructions_IncludesConfiguredMarkers(t *testing.T) {
+	s := config.Sentinels{NeedsInput: "@@NI@@", Done: "@@D@@", NoWork: "@@NW@@"}
+	got := SentinelInstructions(s)
+	for _, marker := range []string{"@@NI@@", "@@D@@", "@@NW@@"} {
+		if !strings.Contains(got, marker) {
+			t.Errorf("SentinelInstructions() = %q, want it to contain %q", got, marker)
+		}
+	}
+}
+
+func TestSentinelInstructions_OmitsUnconfiguredMarkers(t *testing.T) {
+	s := config.Sentinels{Done: "@@D@@"}
+	got := SentinelInstructions(s)
+	if !strings.Contains(got, "@@D@@") {
+		t.Errorf("SentinelInstructions() = %q, want it to contain the configured Done marker", got)
+	}
+	if strings.Contains(got, "if you need the human to answer") {
+		t.Errorf("SentinelInstructions() = %q, want no NeedsInput instruction when unconfigured", got)
+	}
+	if strings.Contains(got, "if there is nothing to do") {
+		t.Errorf("SentinelInstructions() = %q, want no NoWork instruction when unconfigured", got)
+	}
+}
+
+func TestSentinelInstructions_EmptyWhenNoSentinelsConfigured(t *testing.T) {
+	if got := SentinelInstructions(config.Sentinels{}); got != "" {
+		t.Errorf("SentinelInstructions(empty) = %q, want empty string", got)
 	}
 }
 

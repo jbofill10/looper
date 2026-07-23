@@ -210,6 +210,36 @@ func TestModel_LiveInteractiveStateMarksNeedsHuman(t *testing.T) {
 	}
 }
 
+// TestModel_AwaitingApprovalGetsDistinctGlyph asserts that a session which
+// finished its turn and is waiting on human approval (state
+// "awaiting_approval", reached via the Done sentinel) still counts toward
+// NeedYouCount but renders a different glyph than a session genuinely
+// blocked on a question (state "needs_human") or one whose Stop hook
+// matched no sentinel at all (state "awaiting_input"). Without this
+// distinction a user can't tell, from the fleet view alone, whether a
+// paused worker is stuck waiting for an answer or has simply finished and
+// wants a rubber-stamp to advance.
+func TestModel_AwaitingApprovalGetsDistinctGlyph(t *testing.T) {
+	m := NewModel(Options{})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", LoopName: "loopA", WorkerID: "w1", Step: "plan"})
+	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "interactive_state", LoopName: "loopA", WorkerID: "w1", Step: "plan", State: "awaiting_approval"})
+
+	if got := m.NeedYouCount(); got != 1 {
+		t.Fatalf("NeedYouCount() = %d, want 1 for a live awaiting_approval state", got)
+	}
+	row, ok := m.workers[workerKey{RunID: "run-1", WorkerID: "w1"}]
+	if !ok {
+		t.Fatal("row for w1 not found")
+	}
+	got := glyph(row)
+	if got == style.GlyphNeedsYou.Render("⏸") {
+		t.Fatalf("glyph(awaiting_approval) = %q, want it distinct from the needs-human pause glyph", got)
+	}
+	if got != style.GlyphAwaitingApproval.Render("◆") {
+		t.Fatalf("glyph(awaiting_approval) = %q, want the awaiting-approval glyph", got)
+	}
+}
+
 func TestModel_DecisionRequestKeyedByRunAndWorker(t *testing.T) {
 	m := NewModel(Options{})
 	m = send(t, m, StateUpdateMsg{RunID: "run-1", Kind: "step_start", WorkerID: "w1", Task: "t1", Step: "s"})

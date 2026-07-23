@@ -770,9 +770,11 @@ func (m Model) focusedRow() (workerRow, bool) {
 }
 
 // glyph returns the single-character status glyph for a worker row:
-// working ⚙, needs-human ⏸, done ✔, or no-work ∅.
+// working ⚙, needs-human ⏸, awaiting-approval ◆, done ✔, or no-work ∅.
 func glyph(row workerRow) string {
 	switch {
+	case row.State == "awaiting_approval":
+		return style.GlyphAwaitingApproval.Render("◆")
 	case row.PendingReqID != "" || liveInteractiveNeedsHuman(row.State):
 		return style.GlyphNeedsYou.Render("⏸")
 	case row.Status == "done" || row.Status == "stopped" || row.Status == "error":

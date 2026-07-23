@@ -47,8 +47,9 @@ var (
 
 // Glyph styles for the single-character worker status indicators.
 var (
-	GlyphDone     = lipgloss.NewStyle().Foreground(Good)
-	GlyphRunning  = lipgloss.NewStyle().Foreground(Warn)
-	GlyphNeedsYou = lipgloss.NewStyle().Bold(true).Foreground(Bad)
-	GlyphEmpty    = lipgloss.NewStyle().Foreground(Muted)
+	GlyphDone             = lipgloss.NewStyle().Foreground(Good)
+	GlyphRunning          = lipgloss.NewStyle().Foreground(Warn)
+	GlyphNeedsYou         = lipgloss.NewStyle().Bold(true).Foreground(Bad)
+	GlyphAwaitingApproval = lipgloss.NewStyle().Bold(true).Foreground(Accent)
+	GlyphEmpty            = lipgloss.NewStyle().Foreground(Muted)
 )
