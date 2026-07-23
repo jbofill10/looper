@@ -47,6 +47,33 @@ func SentinelVars(h config.Harness) map[string]string {
 	}
 }
 
+// SentinelInstructions returns the instruction text every interactive
+// session's prompt must carry so the model knows which marker to end its
+// final message with, letting events.Derive classify its Stop hook instead
+// of falling back to the ambiguous StateAwaitingInput. This can't be left
+// as an opt-in {{SENTINEL_*}} template var for loop authors to remember
+// (see SentinelVars): a step prompt that omits it produces no visible
+// difference until the session finishes and is indistinguishable from one
+// still blocked on a question. Returns "" if s has no sentinels configured.
+func SentinelInstructions(s config.Sentinels) string {
+	if s.Done == "" && s.NeedsInput == "" && s.NoWork == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Before you stop and hand control back, end your final message with exactly one of these markers on its own line:\n")
+	if s.Done != "" {
+		fmt.Fprintf(&b, "- %s if this step's work is complete.\n", s.Done)
+	}
+	if s.NeedsInput != "" {
+		fmt.Fprintf(&b, "- %s if you need the human to answer a question or make a decision before you can continue.\n", s.NeedsInput)
+	}
+	if s.NoWork != "" {
+		fmt.Fprintf(&b, "- %s if there is nothing to do for this step.\n", s.NoWork)
+	}
+	b.WriteString("Omit the marker only if you are not yet done and will keep working.")
+	return b.String()
+}
+
 // BuildHeadless returns a copy of h.Headless with every "{{PROMPT}}" token
 // replaced by prompt. It errors if h.Headless is empty.
 func BuildHeadless(h config.Harness, prompt string) ([]string, error) {

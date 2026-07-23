@@ -75,6 +75,9 @@ func (e *InteractiveExecutor) Run(rc *runctx.RunContext, step config.Step) (Outc
 		vars[k] = v
 	}
 	prompt := harness.Interpolate(step.Prompt, vars)
+	if instr := harness.SentinelInstructions(e.Harness.Sentinels); instr != "" {
+		prompt += "\n\n" + instr
+	}
 
 	settingsPath := filepath.Join(rc.StepsDir(), step.Name+"-settings.json")
 	looperBin := e.LooperBin

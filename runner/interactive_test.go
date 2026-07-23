@@ -147,6 +147,46 @@ func TestInteractive_OnStateFiresLiveBeforeRunReturns(t *testing.T) {
 	}
 }
 
+// TestInteractive_PromptIncludesSentinelInstructions asserts that every
+// interactive session's prompt is appended with instructions telling the
+// model which marker to end its final message with. Loop authors were
+// previously expected to embed {{SENTINEL_DONE}} etc. themselves; none of
+// the shipped example loops did, so a session that genuinely finished its
+// work fell through Derive's default case (StateAwaitingInput) and was
+// indistinguishable from one still blocked on a question. Looper must
+// supply this instruction itself rather than leave it opt-in.
+func TestInteractive_PromptIncludesSentinelInstructions(t *testing.T) {
+	rc := newRC(t)
+	h := claudeHarness()
+	fp := &FakePrompter{InteractiveOutcome: OutcomeAdvance}
+	var gotPrompt string
+	exec := &InteractiveExecutor{
+		Harness:  h,
+		Prompter: fp,
+		run: func(argv, env []string, socketPath string) error {
+			gotPrompt = argv[len(argv)-1]
+			sendHook(t, socketPath, events.Hook{
+				EventName:            "Stop",
+				LastAssistantMessage: "done " + h.Sentinels.Done,
+			})
+			return nil
+		},
+	}
+	step := config.Step{Name: "session", Type: config.StepInteractive, Prompt: "do the thing"}
+
+	if _, err := exec.Run(rc, step); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(gotPrompt, "do the thing") {
+		t.Errorf("prompt = %q, want it to still contain the step's own prompt text", gotPrompt)
+	}
+	for _, marker := range []string{h.Sentinels.Done, h.Sentinels.NeedsInput, h.Sentinels.NoWork} {
+		if !strings.Contains(gotPrompt, marker) {
+			t.Errorf("prompt = %q, want it to contain sentinel instructions mentioning %q", gotPrompt, marker)
+		}
+	}
+}
+
 func TestInteractive_NoWorkPath(t *testing.T) {
 	rc := newRC(t)
 	h := claudeHarness()
